@@ -16,6 +16,7 @@ import streamlit as st
 
 from dayu.contracts.events import AppEvent, AppEventType
 from dayu.log import Log
+from dayu.execution.options import ExecutionOptions
 from dayu.services.contracts import ChatTurnRequest, SessionResolutionPolicy
 from dayu.services.protocols import ChatServiceProtocol
 
@@ -83,6 +84,7 @@ async def consume_chat_event_stream(
     event_queue: Queue[StreamQueueItem],
     cancel_event: threading.Event,
     trace_id: str,
+    model_name: str | None = None,
 ) -> None:
     """异步消费聊天事件流并写入线程队列。
 
@@ -113,6 +115,7 @@ async def consume_chat_event_stream(
         session_id=session_id,
         ticker=ticker,
         scene_name=_SCENE_NAME_INTERACTIVE,
+        execution_options=ExecutionOptions(model_name=model_name) if model_name else None,
         session_resolution_policy=SessionResolutionPolicy.ENSURE_DETERMINISTIC,
     )
     submission = await chat_service.submit_turn(request)
@@ -223,6 +226,7 @@ def run_stream_worker(
     event_queue: Queue[StreamQueueItem],
     cancel_event: threading.Event,
     trace_id: str,
+    model_name: str | None = None,
 ) -> None:
     """在线程中运行异步事件消费协程。
 
@@ -252,6 +256,7 @@ def run_stream_worker(
                 event_queue=event_queue,
                 cancel_event=cancel_event,
                 trace_id=trace_id,
+                model_name=model_name,
             )
         )
     except BaseException as exception:  # noqa: BLE001
@@ -350,6 +355,7 @@ def start_chat_stream_runtime(
     session_id: str,
     trace_id: str,
     stream_state_key: str,
+    model_name: str | None = None,
 ) -> None:
     """启动聊天流式 worker 并初始化渲染帧状态。
 
@@ -381,6 +387,7 @@ def start_chat_stream_runtime(
             "event_queue": event_queue,
             "cancel_event": cancel_event,
             "trace_id": trace_id,
+            "model_name": model_name,
         },
         daemon=True,
     )

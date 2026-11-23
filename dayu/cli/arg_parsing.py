@@ -516,7 +516,7 @@ def _add_write_args(parser: argparse.ArgumentParser) -> None:
         "--audit-model-name",
         type=str,
         default=None,
-        help="审计模型配置名称（未传时使用 audit/confirm scene manifest 的 model.default_name）",
+        help="审计模型配置名称（未传时沿用显式 --model-name；两者均未传则使用各 scene 默认值）",
     )
     parser.add_argument(
         "--template",

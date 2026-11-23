@@ -38,7 +38,7 @@ def create_runner(
     """
 
     runner_type = ensure_runner_type_enabled(agent_create_args.runner_type)
-    if runner_type == RunnerType.OPENAI_COMPATIBLE:
+    if runner_type in {RunnerType.OPENAI_COMPATIBLE, RunnerType.OPENAI_RESPONSES}:
         runner_params = cast(OpenAICompatibleRunnerParams, agent_create_args.runner_params)
         endpoint_url = runner_params.get("endpoint_url")
         model = runner_params.get("model")
@@ -51,6 +51,8 @@ def create_runner(
             raise ValueError("openai_compatible runner_params 缺少 headers")
         temperature = runner_params.get("temperature")
         return AsyncOpenAIRunner(
+            api_protocol=runner_type,
+            token_prices=runner_params.get("token_prices"),
             endpoint_url=str(endpoint_url),
             model=str(model),
             headers=dict(headers),

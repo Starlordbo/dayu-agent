@@ -528,6 +528,9 @@ class SSEStreamParser:
             )
             return
 
+        if isinstance(data.get("model"), str):
+            self._stream_state["actual_model"] = data["model"]
+
         # 2) 捕获 token 用量（流式 include_usage 最后一个 chunk 携带，choices 可能为空）
         usage = data.get("usage")
         if usage and isinstance(usage, dict):

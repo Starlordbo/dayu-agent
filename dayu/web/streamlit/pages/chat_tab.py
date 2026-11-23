@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import time
+import uuid
 from dataclasses import dataclass
 
 import streamlit as st
@@ -200,6 +201,7 @@ def load_history_for_ticker(
     *,
     chat_service: ChatServiceProtocol,
     ticker: str,
+    session_id: str | None = None,
 ) -> list[ChatMessage]:
     """根据 ticker 对应的固定 session_id 加载历史会话消息。
 
@@ -217,7 +219,7 @@ def load_history_for_ticker(
         无；读路径 fail-soft，异常情况返回空列表。
     """
 
-    session_id = build_chat_session_id(ticker)
+    session_id = session_id or build_chat_session_id(ticker)
     try:
         turns = chat_service.list_conversation_session_turn_excerpts(session_id=session_id, limit=50)
         if not turns:
@@ -418,10 +420,24 @@ def _render_stream_polling_fragment(
     st.rerun()
 
 
+def _format_model_choice(model_name: str) -> str:
+    """展示模型选择，空值明确表示不覆盖服务端选择。
+
+    Args:
+        model_name: 配置名称。
+    Returns:
+        用户可读标签。
+    Raises:
+        无。
+    """
+    return model_name or "默认（已有会话沿用原模型）"
+
+
 def render_chat_tab(
     *,
     selected_stock: WatchlistItem,
     chat_service: ChatServiceProtocol | None = None,
+    model_names: tuple[str, ...] = (),
 ) -> None:
     """渲染交互式分析 Tab。"""
 
@@ -433,6 +449,18 @@ def render_chat_tab(
 
     stream_state = read_stream_frame_state(stream_state_key)
 
+    session_id = build_chat_session_id(ticker)
+    model_name: str | None = None
+    if model_names:
+        session_query_key = _build_state_key(ticker, "session")
+        session_id = str(st.query_params.get(session_query_key, session_id))
+        selected = st.selectbox("对话模型（切换请新建会话）", ("", *model_names), key=_build_state_key(ticker, "model"), format_func=_format_model_choice)
+        model_name = selected or None
+        if st.button("新建会话", key=_build_state_key(ticker, "new_session"), disabled=bool(stream_state and not stream_state.done)):
+            st.query_params[session_query_key] = uuid.uuid4().hex
+            clear_chat_stream_runtime(ticker=ticker, stream_state_key=stream_state_key)
+            st.session_state[message_state_key] = []
+            st.rerun()
     messages = _ensure_messages(message_state_key)
     Log.verbose(
         f"渲染交互式分析页: ticker={ticker}, message_count={len(messages)}",
@@ -443,6 +471,7 @@ def render_chat_tab(
         messages = load_history_for_ticker(
             chat_service=chat_service,
             ticker=ticker,
+            session_id=session_id,
         )
         st.session_state[message_state_key] = messages
         messages = _ensure_messages(message_state_key)
@@ -464,7 +493,6 @@ def render_chat_tab(
             elif chat_service is None:
                 st.warning("聊天服务未就绪，无法清空后端历史。")
             else:
-                session_id = build_chat_session_id(ticker)
                 perform_clear_session_history(
                     chat_service=chat_service,
                     session_id=session_id,
@@ -523,7 +551,6 @@ def render_chat_tab(
             st.warning(_MISSING_SERVICE_WARNING)
             return
         messages.append(ChatMessage(role="user", content=normalized_user_text))
-        session_id = build_chat_session_id(ticker)
         Log.info(
             f"[{trace_id}] 开始请求流式回复: ticker={ticker}, session_id={session_id}",
             module=MODULE,
@@ -535,5 +562,6 @@ def render_chat_tab(
             session_id=session_id,
             trace_id=trace_id,
             stream_state_key=stream_state_key,
+            model_name=model_name,
         )
         st.rerun()

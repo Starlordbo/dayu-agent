@@ -3,6 +3,7 @@
   "model": {
     "default_name": "mimo-v2.5-pro-plan",
     "allowed_names": [
+      "openai-responses",
       "mimo-v2.5-pro",
       "mimo-v2.5-pro-plan",
       "mimo-v2.5-pro-plan-sg",

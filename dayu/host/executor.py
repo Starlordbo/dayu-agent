@@ -1063,6 +1063,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
         content = ""
         warnings: list[str] = []
         errors: list[str] = []
+        fatal_error = False
         degraded = False
         filtered = False
         cancelled_payload: dict[str, str] | None = None
@@ -1082,6 +1083,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
                         warnings.append(_extract_event_message(stream_event.data))
                     elif stream_event.type == EventType.ERROR:
                         errors.append(_extract_event_message(stream_event.data))
+                        fatal_error = fatal_error or not (isinstance(stream_event.data, dict) and stream_event.data.get("recoverable", False))
                     elif (
                         stream_event.type == EventType.FINAL_ANSWER
                         and isinstance(stream_event.data, dict)
@@ -1101,6 +1103,8 @@ class DefaultHostExecutor(HostExecutorProtocol):
                     cancelled_payload = (
                         dict(payload) if isinstance(payload, dict) else None
                     )
+                elif fatal_error:
+                    self._fail_run_preserving_original_exception(run_id=run.run_id, error_summary="; ".join(errors))
                 else:
                     self._complete_run_preserving_terminal_state(run_id=run.run_id)
             except CancelledError:
@@ -1315,6 +1319,8 @@ class DefaultHostExecutor(HostExecutorProtocol):
         """
 
         final_content = ""
+        partial_content: list[str] = []
+        fatal_error = False
         degraded = False
         filtered = False
         warnings: list[str] = []
@@ -1347,6 +1353,9 @@ class DefaultHostExecutor(HostExecutorProtocol):
                 warnings.append(_extract_event_message(stream_event.data))
             elif stream_event.type == EventType.ERROR:
                 errors.append(_extract_event_message(stream_event.data))
+                fatal_error = fatal_error or not (isinstance(stream_event.data, dict) and stream_event.data.get("recoverable", False))
+            elif stream_event.type == EventType.CONTENT_DELTA:
+                partial_content.append(str(stream_event.data or ""))
             elif stream_event.type == EventType.FINAL_ANSWER and isinstance(stream_event.data, dict):
                 final_content = str(stream_event.data.get("content") or "")
                 degraded = bool(stream_event.data.get("degraded", False))
@@ -1369,6 +1378,9 @@ class DefaultHostExecutor(HostExecutorProtocol):
         if token is None and self.run_registry.is_cancel_requested(run_id):
             Log.verbose(f"[{run_id}] 检测到取消请求，跳过 transcript persist", module=MODULE)
             return
+        if fatal_error and not final_content:
+            final_content = "".join(partial_content)
+            degraded = True
         if agent_input.session_state is not None:
             agent_input.session_state.persist_turn(
                 final_content=final_content,
@@ -1377,7 +1389,10 @@ class DefaultHostExecutor(HostExecutorProtocol):
                 warnings=tuple(filter(None, warnings)),
                 errors=tuple(filter(None, errors)),
             )
-        self._complete_run_preserving_terminal_state(run_id=run_id)
+        if fatal_error:
+            self._fail_run_preserving_original_exception(run_id=run_id, error_summary="; ".join(errors))
+        else:
+            self._complete_run_preserving_terminal_state(run_id=run_id)
         self._mark_pending_turn_sent_to_llm_best_effort(
             run_id=run_id,
             pending_turn_id=pending_turn_id,

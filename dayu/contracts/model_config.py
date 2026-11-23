@@ -14,6 +14,7 @@ class RunnerType(StrEnum):
     """Runner 类型。"""
 
     OPENAI_COMPATIBLE = "openai_compatible"
+    OPENAI_RESPONSES = "openai_responses"
     CLI = "cli"
 
 
@@ -100,6 +101,14 @@ class ModelRuntimeHints(TypedDict, total=False):
     conversation_memory: ConversationMemoryRuntimeHints
 
 
+class TokenPrices(TypedDict):
+    """每百万 token 的美元估算单价，由本机配置提供。"""
+
+    input: float
+    cached_input: float
+    output: float
+
+
 class BaseModelConfig(TypedDict, total=False):
     """所有模型配置共享的稳定字段。"""
 
@@ -114,7 +123,7 @@ class BaseModelConfig(TypedDict, total=False):
 class OpenAICompatibleModelConfig(BaseModelConfig, total=False):
     """OpenAI 兼容 Runner 的模型配置。"""
 
-    runner_type: Literal["openai_compatible"]
+    runner_type: Literal["openai_compatible", "openai_responses"]
     endpoint_url: str
     headers: dict[str, str]
     stream_idle_timeout: float
@@ -124,6 +133,7 @@ class OpenAICompatibleModelConfig(BaseModelConfig, total=False):
     supports_usage: bool
     supports_stream_usage: bool
     extra_payloads: dict[str, ModelConfigJsonValue]
+    token_prices: TokenPrices
     max_retries: int
 
 
@@ -151,6 +161,7 @@ class OpenAICompatibleRunnerParams(TypedDict, total=False):
     temperature: float | None
     default_extra_payloads: dict[str, ModelConfigJsonValue]
     timeout: int | float
+    token_prices: TokenPrices
     max_retries: int
     supports_stream: bool
     supports_tool_calling: bool

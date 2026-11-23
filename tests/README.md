@@ -513,3 +513,43 @@ Fins 相关改动时，至少同步更新：
 - 对 Fins 读工具 / runtime 的旧 fake repository，优先通过 `tests/fins/legacy_repository_adapters.py` 适配到 `company/source/processed/blob` 窄仓储；不要为了测试回加生产代码里的 `repository=` 兼容参数
 - 涉及创建文件 symlink 的边界用例，必须从 `tests/conftest.py` 复用 `requires_symlink` 装饰器，由其在导入期实际探测能力（成功则跑、失败则带原因 skip）；不要在每个用例里各写一份 `try: os.symlink ... except OSError: pytest.skip`，也不要按 `sys.platform == "win32"` 一刀切跳过——Windows 启用开发者模式或以管理员运行时仍应正常覆盖该边界。
 - 若某层已删除，对应旧测试也应删除，不做“保留纪念”
+
+## Responses 离线验证
+
+`tests/engine/test_responses_protocol.py` 使用 HTTP 桩验证流式／非流式、多工具、多轮
+原生状态、截断、断流、取消、配额分类、限流重试和用量估算。
+空正文用例同时检查流式与非流式的原生推理项、截断/过滤终态及用量事件，防止提前返回丢失信息。
+`tests/application/test_responses_service.py` 走真实 ChatService→Host→Agent→Runner，
+原生财报工具读取临时空仓储；只替换模型 HTTP。覆盖重建 Host 后追问、失败 pending
+恢复、模型绑定拒绝切换，以及写作／核查场景的默认与显式路由。
+
+```bash
+source .venv/bin/activate
+EDGAR_LOCAL_DATA_DIR="$PWD/workspace/tmp/edgar" python -m pytest tests/engine/test_responses_protocol.py tests/application/test_responses_service.py
+pyright
+```
+
+测试不调用真实模型，不证明真实回答质量。受限环境中的 Edgar 缓存定向到工作区；
+未安装浏览器二进制不影响这些 HTTP 桩与本地仓储测试。
+
+## 显式真实 API 会话验证
+
+`tests/integration/test_live_model_conversation.py` 默认跳过，仅在
+`DAYU_RUN_LIVE_API=1` 时发出付费请求。它通过生产 ChatService → Host → Agent → Runner
+及原生财报工具验证 Astra Responses 和 DeepSeek Chat Completions 的流式回答、
+多公司工具查询、用量事件、模型路由，以及重建 Host 后同一会话的上下文保持。
+测试在独立工作区通过公司仓储登记测试身份，不放入真实财报或纪要，只开放 fins
+工具，不开放 web/ingestion。当前使用 `gpt-6-astra` 与 `deepseek-flash`；每个模型两轮，
+每轮最多 4 次模型迭代、每次最多 1024 输出 token，无 HTTP 自动重试或超限强制续答。
+
+```bash
+source .venv/bin/activate
+# 先在本机终端配置 OPENAI_API_KEY 和 DEEPSEEK_API_KEY。
+DAYU_RUN_LIVE_API=1 EDGAR_LOCAL_DATA_DIR="$PWD/workspace/tmp/edgar" \
+  python -m pytest tests/integration/test_live_model_conversation.py --show-capture=no
+```
+
+单轮事件逐条写入测试工作区的 `turn-1.jsonl` / `turn-2.jsonl`，通过后另写 `passed.json`。
+事件日志不收集 reasoning 增量或原生加密 reasoning；工作区可能含 Host 执行快照，应仅在
+本机保留，不提交 Git。本测试验证协议和会话闭环，不验证真实财报研究质量、网页交互、
+进程崩溃中点恢复或取消路径。

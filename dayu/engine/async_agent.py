@@ -34,6 +34,7 @@ from typing import Any, AsyncIterator, Dict, List, Literal, Optional, Tuple, cas
 from dataclasses import dataclass
 
 from dayu.contracts.agent_types import (
+    JsonValue,
     AgentMessage,
     AgentTraceIdentity,
     ToolCallPayload,
@@ -42,6 +43,7 @@ from dayu.contracts.agent_types import (
     build_tool_chat_message,
     build_user_chat_message,
 )
+from .request_usage import RunRequestUsage
 from .duplicate_call_guard import DuplicateCallGuard
 from .context_budget import ContextBudgetState, PREDICTIVE_OVERHEAD_TOKENS, ToolResultBudgetCapper
 from .events import (
@@ -50,6 +52,7 @@ from .events import (
     error_event,
     final_answer_event,
     iteration_start_event,
+    metadata_event,
     warning_event,
 )
 
@@ -612,6 +615,7 @@ class AsyncAgent:
             if self.tool_trace_recorder_factory is not None
             else None
         )
+        usage_summary = RunRequestUsage()
         self._acquire_run_slot(effective_run_id)
         if self.tool_executor is not None:
             self.tool_executor.clear_cursors()
@@ -628,6 +632,9 @@ class AsyncAgent:
                         tools_disabled=True,
                         **call_payloads,
                     ):
+                        usage_summary.observe(event)
+                        if event.type in {EventType.FINAL_ANSWER, EventType.ERROR}:
+                            yield metadata_event("run_usage_summary", usage_summary.summary(), **event.metadata)
                         yield event
             else:
                 async for event in self._run_loop(
@@ -638,8 +645,12 @@ class AsyncAgent:
                     trace_recorder=trace_recorder,
                     **call_payloads,
                 ):
+                    usage_summary.observe(event)
+                    if event.type in {EventType.FINAL_ANSWER, EventType.ERROR}:
+                        yield metadata_event("run_usage_summary", usage_summary.summary(), **event.metadata)
                     yield event
         finally:
+            Log.info(f"[{effective_run_id}] run_usage_summary={json.dumps(usage_summary.summary())}", module=MODULE)
             await self.runner.close()
             if trace_recorder is not None:
                 trace_recorder.close()
@@ -713,6 +724,7 @@ class AsyncAgent:
             content_buffer: List[str] = []
             content_complete_seen = False
             content_complete_text: Optional[str] = None
+            responses_output: list[dict[str, JsonValue]] = []
             reasoning_content: Optional[str] = None
             done_event_seen = False
             done_event_summary: Dict[str, Any] = {}
@@ -838,6 +850,7 @@ class AsyncAgent:
                 elif event.type == EventType.CONTENT_COMPLETE:
                     content_complete_seen = True
                     content_complete_text = event.data
+                    responses_output = event.metadata.get("responses_output", [])
                     # 提取 reasoning_content（thinking 模式下由 Runner 通过 metadata 传递）
                     rc = event.metadata.get("reasoning_content") if event.metadata else None
                     if rc:
@@ -1015,6 +1028,8 @@ class AsyncAgent:
                         tool_calls=tool_calls_payload,
                         reasoning_content=reasoning_content,
                     )
+                if responses_output:
+                    assistant_message["responses_output"] = responses_output
                 messages.append(assistant_message)
                 
                 # Pass 1: 序列化所有工具结果
@@ -1179,7 +1194,10 @@ class AsyncAgent:
                         accumulated_content_parts.append(final_content)
                     # 将截断的部分内容作为 assistant message
                     if final_content:
-                        messages.append(build_assistant_chat_message(content=final_content))
+                        partial_message = build_assistant_chat_message(content=final_content)
+                        if responses_output:
+                            partial_message["responses_output"] = responses_output
+                        messages.append(partial_message)
                     messages.append(
                         build_user_chat_message(
                             self.running_config.continuation_prompt or DEFAULT_CONTINUATION_PROMPT

@@ -59,6 +59,7 @@ class AssistantChatMessage(TypedDict, total=False):
     content: str | None
     tool_calls: list[ToolCallPayload]
     reasoning_content: str
+    responses_output: list[dict[str, JsonValue]]
 
 
 class ToolChatMessage(TypedDict, total=False):

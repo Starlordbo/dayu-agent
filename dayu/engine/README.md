@@ -351,3 +351,21 @@ Engine 自己不做 run registry，也不做跨进程取消桥接。
 6. [tool_registry.py](tool_registry.py)
 7. [tool_trace.py](tool_trace.py)
 8. [cancellation.py](cancellation.py)
+
+## Responses 协议边界
+
+`RunnerType.OPENAI_RESPONSES`（配置值 `openai_responses`）由现有 Runner 工厂装配，
+与 `openai_compatible` 共享 HTTP 生命周期、取消令牌、限流退避和工具批处理执行。
+`responses_protocol.py` 负责请求转换和语义事件转换，SSE 字节分帧继续复用原解析器。
+
+- 工具结果使用 `call_id` 回传为 `function_call_output`，不使用 output item 的 `id`。
+- `AssistantChatMessage.responses_output` 保存当前工具循环的原生 output 项；包括加密 reasoning，按原顺序回传。它不进入答案或推理展示事件。流式优先采用 `response.output_item.done` 的完整项。
+- 请求使用 `store=false`、`include=["reasoning.encrypted_content"]`。工具 schema 显式 `strict=false`，保留 Dayu 可选参数语义。Responses 不发送 Chat Completions 的 `temperature`、`messages` 或 `stream_options`。
+- 必须收到 Responses 终态才执行工具；未完成的工具批次不执行。文本 `max_output_tokens` 沿用 Agent 续写；内容过滤单独标识。无终态、坏 JSON、非法输出项均返回协议错误。
+- 正文为空的合法流式响应也经过统一终态处理，保留原生输出项、截断/过滤标志及已返回的 token 用量。
+- 硬配额错误（含 HTTP 429 的 `insufficient_quota`）不重试、不切换模型；普通限流继续遵守 Retry-After。已开始返回内容的 HTTP 响应若中断，不自动重发。
+- 每个 HTTP 尝试产生 `request_attempt`；用量事件携带实际返回模型（未返回时为请求模型）、输入、缓存及输出 token。Agent 在终态之前输出 `run_usage_summary`，并在退出日志中记录汇总（包括取消）。
+- `token_prices` 按每百万 token 美元单价估算费用；缺价格或部分请求用量未知时总估算为 null，并单列已知部分。任何估算均不等同供应商实际账单。
+
+新用户轮次由 Host 原有 transcript/memory 重建；pending 恢复沿用原 prepared snapshot，
+不是逐工具检查点，也不保证已经执行过的工具绝不重放。

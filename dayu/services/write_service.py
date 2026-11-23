@@ -59,6 +59,9 @@ class WriteService(WriteServiceProtocol):
             RuntimeError: 写作流水线主体抛出的运行时异常会继续向上传播。
         """
 
+        # 单一报告模型选择必须同时覆盖主写作和现有核查场景；无选择时保留场景默认。
+        if request.write_config.write_model_override_name and not request.write_config.audit_model_override_name:
+            request = replace(request, write_config=replace(request.write_config, audit_model_override_name=request.write_config.write_model_override_name))
         session = self.host.create_session(SessionSource.API)
         spec = HostedRunSpec(
             operation_name="write_pipeline",

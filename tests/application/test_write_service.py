@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
+from unittest.mock import Mock
 from typing import Any, Callable, Literal, cast, overload
 
 import pytest
@@ -296,7 +297,8 @@ def _build_request() -> WriteRequest:
 
 
 @pytest.mark.unit
-def test_write_service_runs_pipeline_via_host_executor(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("selected_model", ["", "openai-responses"])
+def test_write_service_runs_pipeline_via_host_executor(monkeypatch: pytest.MonkeyPatch, selected_model: str) -> None:
     """WriteService 应通过 host executor 托管同步执行。"""
 
     from tests.application.conftest import StubHostExecutor, StubSessionRegistry
@@ -319,13 +321,16 @@ def test_write_service_runs_pipeline_via_host_executor(monkeypatch: pytest.Monke
         company_meta_summary_resolver=lambda ticker: {"ticker": ticker},
     )
 
-    monkeypatch.setattr(
-        "dayu.services.write_service.run_write_pipeline",
-        lambda **kwargs: 0,
-    )
+    pipeline = Mock(return_value=0)
+    monkeypatch.setattr("dayu.services.write_service.run_write_pipeline", pipeline)
 
-    result = service.run(_build_request())
+    request = _build_request()
+    request = replace(request, write_config=replace(request.write_config, write_model_override_name=selected_model))
+    result = service.run(request)
 
+    routed = pipeline.call_args.kwargs["write_config"]
+    assert routed.write_model_override_name == selected_model
+    assert routed.audit_model_override_name == selected_model
     assert result == 0
     assert host_executor.sync_call_count == 1
     assert host_executor.last_spec is not None

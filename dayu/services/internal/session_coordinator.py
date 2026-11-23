@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from dayu.contracts.execution_metadata import ExecutionDeliveryContext
 from dayu.contracts.session import SessionRecord, SessionSource
 from dayu.host.protocols import SessionOperationsProtocol
 from dayu.services.contracts import SessionResolutionPolicy
@@ -31,6 +32,7 @@ class ServiceSessionCoordinator:
         self,
         *,
         scene_name: str | None = None,
+        metadata: ExecutionDeliveryContext | None = None,
     ) -> SessionRecord:
         """创建新的 Host session。
 
@@ -47,6 +49,7 @@ class ServiceSessionCoordinator:
         return self.host.create_session(
             self.session_source,
             scene_name=scene_name,
+            metadata=metadata,
         )
 
     def require_existing(
@@ -54,6 +57,7 @@ class ServiceSessionCoordinator:
         session_id: str,
         *,
         scene_name: str | None = None,
+        metadata: ExecutionDeliveryContext | None = None,
     ) -> SessionRecord:
         """要求给定 session 已存在，并刷新活跃时间。
 
@@ -68,10 +72,11 @@ class ServiceSessionCoordinator:
             KeyError: session 不存在时抛出。
         """
 
-        del scene_name
         session = self.host.get_session(session_id)
         if session is None:
             raise KeyError(f"session 不存在: {session_id}")
+        if metadata:
+            return self.host.ensure_session(session_id, self.session_source, scene_name=scene_name, metadata=metadata)
         self.host.touch_session(session_id)
         refreshed = self.host.get_session(session_id)
         if refreshed is None:
@@ -83,6 +88,7 @@ class ServiceSessionCoordinator:
         session_id: str,
         *,
         scene_name: str | None = None,
+        metadata: ExecutionDeliveryContext | None = None,
     ) -> SessionRecord:
         """按确定性 session_id 幂等获取或创建会话。
 
@@ -101,6 +107,7 @@ class ServiceSessionCoordinator:
             session_id,
             self.session_source,
             scene_name=scene_name,
+            metadata=metadata,
         )
 
     def resolve(
@@ -109,6 +116,7 @@ class ServiceSessionCoordinator:
         session_id: str | None,
         scene_name: str | None,
         policy: SessionResolutionPolicy,
+        metadata: ExecutionDeliveryContext | None = None,
     ) -> SessionRecord:
         """按策略解析本次请求对应的 Host session。
 
@@ -127,20 +135,20 @@ class ServiceSessionCoordinator:
 
         if policy == SessionResolutionPolicy.AUTO:
             if session_id is None:
-                return self.create_new(scene_name=scene_name)
-            return self.require_existing(session_id, scene_name=scene_name)
+                return self.create_new(scene_name=scene_name, metadata=metadata)
+            return self.require_existing(session_id, scene_name=scene_name, metadata=metadata)
         if policy == SessionResolutionPolicy.CREATE_NEW:
             if session_id is not None:
                 raise ValueError("CREATE_NEW 策略不接受显式 session_id")
-            return self.create_new(scene_name=scene_name)
+            return self.create_new(scene_name=scene_name, metadata=metadata)
         if policy == SessionResolutionPolicy.REQUIRE_EXISTING:
             if session_id is None:
                 raise ValueError("REQUIRE_EXISTING 策略要求显式 session_id")
-            return self.require_existing(session_id, scene_name=scene_name)
+            return self.require_existing(session_id, scene_name=scene_name, metadata=metadata)
         if policy == SessionResolutionPolicy.ENSURE_DETERMINISTIC:
             if session_id is None:
                 raise ValueError("ENSURE_DETERMINISTIC 策略要求显式 session_id")
-            return self.ensure_deterministic(session_id, scene_name=scene_name)
+            return self.ensure_deterministic(session_id, scene_name=scene_name, metadata=metadata)
         raise ValueError(f"未知 session 解析策略: {policy}")
 
 

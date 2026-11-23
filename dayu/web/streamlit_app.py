@@ -205,6 +205,7 @@ def main() -> None:
             fins_service=fins_service,
             chat_service=chat_service,
             write_service=write_service,
+            model_names=tuple(name for name in prepared_deps.scene_execution_acceptance_preparer.model_catalog.load_models() if name in prepared_deps.scene_execution_acceptance_preparer.read_scene_definition("interactive").model.allowed_names),
         )
     else:
         st.error("财报服务不可用，无法展示股票详情。请检查配置后刷新页面。")

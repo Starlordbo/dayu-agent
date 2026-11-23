@@ -446,6 +446,7 @@ async def test_call_handles_non_retriable_http_error(monkeypatch: pytest.MonkeyP
     )
     events = await _collect_events(runner.call([{"role": "user", "content": "hi"}], stream=False))
     assert events
+    events = [event for event in events if event.type != EventType.METADATA]
     assert events[0].type == EventType.ERROR
     assert events[0].metadata.get("error_type") == "invalid_request"
 
@@ -541,6 +542,8 @@ async def test_call_cancelled_during_retry_sleep_raises_cancelled_error(
     )
 
     stream = runner.call([{"role": "user", "content": "hi"}], stream=False)
+    attempt_event = await stream.__anext__()
+    assert attempt_event.type == EventType.METADATA
     first_event = await stream.__anext__()
 
     assert first_event.type == EventType.WARNING
@@ -797,6 +800,8 @@ async def test_call_prefers_cancelled_over_timeout_retry(
         cancellation_token=token,
     )
     stream = runner.call([{"role": "user", "content": "hi"}], stream=False)
+    attempt_event = await stream.__anext__()
+    assert attempt_event.type == EventType.METADATA
     first_event = await stream.__anext__()
 
     assert first_event.type == EventType.WARNING

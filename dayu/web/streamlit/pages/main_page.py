@@ -58,6 +58,7 @@ def render_stock_detail_page(
     fins_service: FinsServiceProtocol,
     chat_service: ChatServiceProtocol,
     write_service: WriteServiceProtocol,
+    model_names: tuple[str, ...] = (),
 ) -> None:
     """渲染股票详情页面（选中自选股后展示）。
 
@@ -88,6 +89,7 @@ def render_stock_detail_page(
         render_chat_tab(
             selected_stock=selected_stock,
             chat_service=chat_service,
+            model_names=model_names,
         )
 
     with tabs[2]:

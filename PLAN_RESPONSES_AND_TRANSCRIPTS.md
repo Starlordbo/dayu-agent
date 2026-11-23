@@ -1,6 +1,6 @@
 # Dayu Agent 开发计划：Responses API 与网页纪要上传
 
-更新日期：2026-11-22。状态：计划已复核，功能尚未实施。本文件是新项目的开发交接入口，不是功能通过验收的声明。
+更新日期：2026-11-23。状态：P1 已完成离线实现与验证；P2、P3 及真实模型/网页质量验收尚未完成。离线通过不代表真实研究质量通过。
 
 ## 1. 仓库与开工位置
 
@@ -101,8 +101,53 @@ Research OS 的 `scripts/native_dayu_bridge.py` 仅作为已有协议转换经�
 - 本次计划只涉及代码与文档路径、接口及验收范围；密钥、原始纪要、财报、模型输入输出和运行工作区不得提交到 Git。
 - 先前 4–7 个工程日仅为初步估算，非承诺。流式续接、会话恢复、四格式转换环境和报告状态接线尚未实现，应在 P1 完成后按实际剩余工作修订估算，不以缩减质量目标赶进度。
 
-### 当前记录
+### 2026-11-22：实施前记录
 
 - 已完成：核对 fork 基线、原生模型/上传/工具/报告入口；两项独立只读代码复核；明确同名覆盖风险、Q4 识别缺陷、会话模型保持、报告场景选择和引用接线。
 - 尚未完成：P1、P2、P3 及本计划要求的真实网页质量验收。此次更新计划没有调用付费模型 API，也没有启动产品运行。
 - 新项目第一步：核对工作目录和基线，准备本地 Python 3.11 环境及配置，跑受影响的现有模型/工具测试，开始 P1 的 Responses Runner 适配。先不调用付费 API。
+
+
+### 2026-11-23：P1 本地实施记录
+
+- 设备与目录：已确认 Apple M4 Mac mini；复用 `/Users/bobai/Documents/Codex/2026-11-23/mac-mini-documents-codex-starlordbo-dayu/dayu-agent`，origin 为 Starlordbo/dayu-agent。开始实施 HEAD 为 `42fb22a5a3c9728fed45f438158e4ce2882aa4b4`。Python 3.11.18，按 macOS arm64 constraints 安装依赖。
+- 实现：明确的 `openai_responses` 配置和 Runner 协议适配；流式/非流式文本、多工具、多轮 call_id 回传、原生 reasoning 不透明保留；未完成工具不执行；取消、限流重试、硬配额立即停止及已输出内容保留。没有另建研究循环。
+- 会话与报告：现有会话元数据持久化模型名称与配置指纹，重建 Host 后追问/恢复沿用配置，拒绝原会话切换供应商/协议；网页新会话可选模型。报告服务/CLI 显式主模型选择在未另选 audit 时覆盖现有核查步骤，默认配置保留。报告网页接线仍属于 P3，尚未实现。
+- Host 修正：不可恢复的 Agent 错误标记 FAILED，保存部分内容并保留既有 pending turn；验证实际服务失败后重建 Host，再经原恢复入口成功。该恢复是既有整轮重跑，不是工具执行检查点续跑；原生 reasoning 状态用于当前工具循环，不声称进程崩溃后从工具中点无损续接。
+- 用量：每次请求记录请求编号、尝试次数、模型与可获得的 token 用量；整轮汇总耗时、请求数和可选价格表费用估算。失败/重试计入请求数；未知用量不伪装为零费用。未做供应商账单对账。
+- 验证基线：受影响原测试 187 passed、1 skipped；全仓库 pyright 0 errors。测试使用合成材料与模拟 HTTP，实际经过 Service → Host → Agent → 原生工具。
+- 新增及接线验证：41 passed；新增模块覆盖率 responses_protocol 95%、request_usage 100%、session_model 100%。这不是全仓库覆盖率；该组测试全仓库汇总为 31%。
+- 限制：没有调用付费 API，没有验证真实模型答案、真实财报/纪要研究质量或浏览器人工交互；P2/P3 未实施。没有 commit 或 push，没有修改 Research OS 或 MacBook 文件。
+- 项目绑定：执行工作目录固定为上述克隆；应用 attach_worktree 返回工具错误，未宣称应用项目绑定成功。需要在 Codex 界面把上述克隆根目录添加为本地项目，并将任务放入该项目。
+- 下一步：保留本地未提交改动供审阅；真实调用、P2/P3 不在本次已执行范围。
+
+- 最终回归：996 passed、1 skipped（55.57 秒）；全仓库 pyright 0 errors、0 warnings；pip check 无依赖冲突；git diff --check 通过。日志保留于本地 `workspace/tmp/p1-validation/`（不提交）。
+
+### 2026-11-23：接续复核与本机 API 配置
+
+- 修复流式空正文提前返回导致原生 Responses 状态、截断/过滤终态及用量事件丢失的问题。新增六项测试修复前为 3 failed、3 passed，修复后相关测试 46 passed；pyright 0 errors、0 warnings。
+- 扩大到 engine/application/contracts/services/architecture 全目录后结果为 3031 passed、2 skipped、13 failed、2 errors；并非先前 997 项的相同测试集合。失败包含场景 manifest 断言、Run registry 用例和 Docling 下载模型时的 DNS 错误，尚待逐项归因修复，不能宣称扩大回归全部通过。日志为 `workspace/tmp/p1-validation/dayu-p1-review-regression.log`。
+- 用户已授权必要的分阶段付费 API 验证，并在 Mac mini 当前用户配置中录入 OpenAI、DeepSeek 密钥；本轮已验证 Dayu 配置加载器可解析两项凭据，不记录密钥值。
+- 依据本机 Codex 配置及官方模型文档，将本地 `workspace/config/llm_models.json` 的 `openai-responses` 模型设为 `gpt-6-astra`，协议保持 Responses；DeepSeek 保持 Chat Completions。仅本机模型配置，不改变包内默认模型或提交密钥。
+- 查询两家模型列表均遇到当前执行环境 DNS 解析失败，尚未验证密钥有效性及真实模型请求。P2/P3 未开始，未 commit/push。
+
+### 2026-11-23：本机终端真实 API 连通验证通过
+
+- 用户在 Mac mini 普通终端执行最小连通验证；结果文件为 `workspace/tmp/p1-validation/api-connectivity-20261123T040136998821Z.json`。两家均 HTTP 200，正文为 `OK`。
+- OpenAI：`gpt-6-astra` 经 `/v1/responses` 返回 completed；输入 11、输出 5、合计 16 token，缓存命中 0，耗时 4.355 秒。
+- DeepSeek：`deepseek-flash` 经 `/chat/completions` 返回 stop；输入 9、输出 1、合计 10 token，缓存命中 0，耗时 1.645 秒。本机 Flash 配置已采用官方推荐的 `deepseek-flash` 模型 ID。
+- 已确认这两项密钥对上述模型与端点的最小请求有效。本次不经过 Dayu Service/Host/Agent，不能替代真实流式、工具往返、会话恢复或财报研究质量验收；未核对账单费用。代理命令执行环境仍有网络限制，普通终端成功不表示代理环境限制已解除。
+
+### 2026-11-23：准备原生服务真实会话验证
+
+- 新增默认跳过的 `tests/integration/test_live_model_conversation.py`，显式 `DAYU_RUN_LIVE_API=1` 才运行两家真实模型。复用现有 Service/Host/Agent 和正式公司仓储，在独立空文档库验证流式、多工具回传、用量、模型保持及重建 Host 后追问；没有另建研究循环。
+- 每家两轮，每轮最多 4 次模型迭代、每次 1024 输出 token，关闭 HTTP 重试及超限强制续答；不开放 web/ingestion，不加载真实研究材料。
+- 两协议模拟 HTTP 预检及相关离线测试合计 48 passed、2 skipped；两项 skip 为尚未启用的真实调用用例，不计入真实验收通过。
+- 普通终端入口为 `workspace/tmp/verify_dayu_live.command`，自动加载用户级密钥，生成权限受限的独立结果目录并输出路径。代理网络限制仍未解除；等待用户从普通终端执行后读取结果，不宣称真实服务链路已通过。
+
+### 2026-11-23：原生服务真实会话验证通过及环境阻塞定位
+
+- 已读取 `workspace/tmp/p1-validation/live-service-RYbCjX54/` 的 pytest 与逐轮事件日志：2 passed，16.14 秒。两家均经过真实 ChatService → Host → Agent → Runner → 原生财报查询工具；每家两轮、每轮两次模型请求，最终回答非 degraded，Host 重建后保留同会话校验标记。
+- Astra：4 次请求，输入 16,728、其中缓存命中 11,797、输出 262 token。DeepSeek：4 次请求，输入 19,428、其中缓存命中 15,616、输出 380 token。未配置价格表，未核对账单，不报告实际费用。
+- 本次证明流式、工具回传、会话保持及用量记录；仍不证明真实财报研究质量、浏览器交互、取消或工具级中点恢复。P2/P3 未开始，扩大回归的既有失败仍需处理。
+- 用户已修改本机 Codex 配置为 `sandbox_workspace_write.network_access=true` 并重启，但代理命令进程仍携带 `CODEX_SANDBOX_NETWORK_DISABLED=1`，两家 DNS 查询失败。当前会话策略仍为受限网络且不允许沙箱提权；现有应用工具未提供更改该策略的入口，read_thread 返回应用工具请求错误。不能将配置文件已修改表述为代理联网已恢复，也不继续要求用户重复重启或截图。

@@ -943,3 +943,19 @@ python -m dayu.cli prompt "总结苹果风险" --ticker AAPL --model-name mimo-v
 - 本文档只描述当前存在的配置文件与字段。
 - 新增、删除、重命名配置字段后，应同步更新本文件。
 - 若某项配置同时存在包内默认值与 workspace 覆盖值，应在代码和文档中保持优先级口径一致。
+
+## 可选 Responses 模型
+
+内置 `openai-responses` 条目不改变各场景默认模型。使用前在本机设置
+`OPENAI_API_KEY` 和 `OPENAI_RESPONSES_MODEL`（供应商实际支持的模型 ID）。
+凭据只保留在本机环境中。自定义供应商可在工作区 `llm_models.json` 设置完整
+`endpoint_url`、`model`、`headers` 和 `runner_type: "openai_responses"`。
+
+对话和写作相关场景已允许 `openai-responses`。添加其他配置名时仍须同步修改对应
+scene 的 `model.allowed_names`；`default_name` 无需改变。
+Responses 的额外推理／输出限制参数使用该协议的字段，如 `reasoning`、`max_output_tokens`。
+场景温度档位保留以满足配置解析契约，但 Responses 请求不发送 temperature。
+
+可选 `token_prices` 是用户维护的美元估算价格表，含 `input`、`cached_input`、`output`
+三个每百万 token 单价。不内置时效性价格，不配置则不输出费用数值。模型 ID、地址、协议
+的修改要求新建对话；同一会话不允许悄悄使用修改后的配置。

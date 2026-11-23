@@ -1065,6 +1065,7 @@ def test_handle_payload_no_truncated_on_finish_reason_stop() -> None:
     )
 
     payload = json.dumps({
+        "model": "provider-model-version",
         "choices": [
             {
                 "index": 0,
@@ -1081,6 +1082,7 @@ def test_handle_payload_no_truncated_on_finish_reason_stop() -> None:
 
     asyncio.run(_collect())
 
+    assert parser._stream_state.get("actual_model") == "provider-model-version"
     assert parser._stream_state.get("finish_reason") == "stop"
     assert parser._stream_state.get("truncated") is not True
 

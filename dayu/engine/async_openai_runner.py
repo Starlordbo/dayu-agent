@@ -100,7 +100,9 @@ from types import ModuleType
 from typing import AsyncIterator, Dict, List, Optional, Any, TYPE_CHECKING
 from dataclasses import dataclass
 
-from dayu.contracts.agent_types import AgentMessage
+from dayu.contracts.agent_types import AgentMessage, JsonValue
+from dayu.contracts.model_config import RunnerType, TokenPrices
+from .responses_protocol import ResponsesSSEParser, build_responses_payload, normalize_response, is_quota_error, NATIVE_OUTPUT_KEY
 from dayu.contracts.protocols import ToolExecutionContext
 from dayu.contracts.cancellation import CancelledError as EngineCancelledError, CancellationToken
 
@@ -263,6 +265,10 @@ _DEFAULT_ERROR_BODY_PREVIEW_CHARS: int = 200
 _DEFAULT_ERROR_BODY_DETAIL_CHARS: int = 400
 _RESERVED_EXTRA_PAYLOAD_KEYS = frozenset(
     {
+        "input",
+        "previous_response_id",
+        "store",
+        "include",
         "messages",
         "model",
         "stream",
@@ -515,6 +521,8 @@ class AsyncOpenAIRunner:
         supports_stream: bool = True,
         supports_tool_calling: bool = True,
         supports_stream_usage: bool = False,
+        api_protocol: RunnerType = RunnerType.OPENAI_COMPATIBLE,
+        token_prices: TokenPrices | None = None,
         running_config: Optional[AsyncOpenAIRunnerRunningConfig] = None,
         cancellation_token: CancellationToken | None = None,
     ):
@@ -535,6 +543,8 @@ class AsyncOpenAIRunner:
             supports_stream_usage: 是否支持流式 usage 采集（默认 False）
             running_config: 运行时配置（包含 tool_timeout_seconds 等调试和运行参数）
             cancellation_token: 当前 runner 关联的取消令牌。
+            api_protocol: 显式选择 Chat Completions 或 Responses 协议。
+            token_prices: 可选的每百万 token 美元估价，未配置不估算费用。
 
         Returns:
             None
@@ -553,6 +563,8 @@ class AsyncOpenAIRunner:
         if running_config.stream_idle_heartbeat_sec is None:
             running_config.stream_idle_heartbeat_sec = _DEFAULT_STREAM_IDLE_HEARTBEAT_SEC
 
+        self.token_prices = token_prices
+        self.api_protocol = api_protocol
         self.endpoint_url = endpoint_url
         self.model = model
         Log.verbose(f"初始化 AsyncOpenAIRunner: model={model}, endpoint_url={endpoint_url}", module=MODULE)
@@ -1078,6 +1090,11 @@ class AsyncOpenAIRunner:
             )
             payload["n"] = 1  # 强制覆盖为 1
 
+        if self.api_protocol == RunnerType.OPENAI_RESPONSES:
+            payload = build_responses_payload(payload, messages)
+        elif any(message.get(NATIVE_OUTPUT_KEY) for message in messages):
+            raise ValueError("Responses 原生状态不能发送到 Chat Completions")
+
         # 2. 重试循环（复用同一 Runner 实例的 session，利用连接池）
         aiohttp_module = _require_aiohttp_module()
         request_timeout = self._build_request_timeout(stream=stream)
@@ -1086,6 +1103,9 @@ class AsyncOpenAIRunner:
             for attempt in range(self.max_retries + 1):
                 self._raise_if_cancelled()
                 attempt_number = attempt + 1
+                trace_meta["attempt"] = attempt_number
+                trace_meta["model"] = self.model
+                yield self._annotate_event(metadata_event("request_attempt", {"model": self.model, "attempt": attempt_number}), trace_meta)
                 post_context: Any = None
                 response: Any = None
                 response_entered = False
@@ -1190,6 +1210,10 @@ class AsyncOpenAIRunner:
                     )
                     error_preview, error_detail = _extract_error_body_slices(error_body)
 
+                    if is_quota_error(error_body):
+                        yield self._annotate_event(error_event("模型额度耗尽", recoverable=False, error_type="insufficient_quota", status=response.status), trace_meta)
+                        return
+
                     if response.status in NON_RETRIABLE_STATUS_CODES:
                         error_type = _classify_non_retriable_error_type(response.status, error_body)
 
@@ -1261,6 +1285,9 @@ class AsyncOpenAIRunner:
                 except EngineCancelledError:
                     raise
                 except asyncio.TimeoutError:
+                    if response_entered and response.status == 200:
+                        yield self._annotate_event(error_event("响应中断；保留已产生内容，不自动重发", recoverable=False, error_type="response_interrupted"), trace_meta)
+                        return
                     if attempt < self.max_retries:
                         delay = 2 ** attempt
                         Log.info(
@@ -1294,6 +1321,9 @@ class AsyncOpenAIRunner:
                     return
 
                 except aiohttp_module.ClientError as exc:
+                    if response_entered and response.status == 200:
+                        yield self._annotate_event(error_event("响应中断；保留已产生内容，不自动重发", recoverable=False, error_type="response_interrupted"), trace_meta)
+                        return
                     if attempt < self.max_retries:
                         delay = 2 ** attempt
                         Log.info(
@@ -1410,7 +1440,8 @@ class AsyncOpenAIRunner:
         log_prefix = f"[{self.name}][{request_id}]"
 
         # 1) 使用 SSEStreamParser 解析流，透传增量事件
-        parser = SSEStreamParser(
+        parser_class = ResponsesSSEParser if self.api_protocol == RunnerType.OPENAI_RESPONSES else SSEStreamParser
+        parser = parser_class(
             name=self.name,
             request_id=request_id,
             running_config=self.running_config,
@@ -1424,6 +1455,8 @@ class AsyncOpenAIRunner:
 
         # 2) 获取解析结果
         result = parser.get_result()
+        if result.stream_state.get("actual_model"):
+            trace_meta["model"] = result.stream_state["actual_model"]
         full_content = result.content
         raw_tool_call_count = result.raw_tool_call_count
 
@@ -1459,19 +1492,8 @@ class AsyncOpenAIRunner:
             Log.warn(f"{log_prefix} SSE 流结束但未收到 [DONE] 标记", module=MODULE)
 
         # 4) 校验输出：既没有内容也没有工具调用
-        if not full_content and raw_tool_call_count == 0:
-            if result.stream_state.get("saw_choice"):
-                # 收到 choices 但 delta 为空（正常情况，例如 content:null）
-                yield self._annotate_event(content_complete(full_content), trace_meta)
-                empty_summary: Dict[str, Any] = {
-                    "total_chars": len(full_content),
-                    "tool_calls": 0,
-                    "truncated": False,
-                }
-                if result.usage:
-                    empty_summary["usage"] = result.usage
-                yield self._annotate_event(done_event(summary=empty_summary), trace_meta)
-                return
+        # 合法的空正文也必须经过统一终态路径，保留截断、过滤、原生状态和用量。
+        if not full_content and raw_tool_call_count == 0 and not result.stream_state.get("saw_choice"):
             Log.error(
                 f"{log_prefix} SSE 流结束但没有任何有效输出（choices 字段始终为空）"
                 f"（error_type=response_error）",
@@ -1524,6 +1546,8 @@ class AsyncOpenAIRunner:
 
         # 6) 发送内容完成事件
         cc_kwargs: Dict[str, Any] = {}
+        if result.stream_state.get(NATIVE_OUTPUT_KEY):
+            cc_kwargs[NATIVE_OUTPUT_KEY] = result.stream_state[NATIVE_OUTPUT_KEY]
         if result.reasoning_content:
             cc_kwargs["reasoning_content"] = result.reasoning_content
         yield self._annotate_event(content_complete(full_content, **cc_kwargs), trace_meta)
@@ -1608,6 +1632,15 @@ class AsyncOpenAIRunner:
             事件异步迭代器。
         """
         log_prefix = f"[{self.name}][{request_id}]"
+        native_output = []
+        if self.api_protocol == RunnerType.OPENAI_RESPONSES:
+            try:
+                result = normalize_response(result)
+                native_output = result[NATIVE_OUTPUT_KEY]
+            except ValueError as exc:
+                yield self._annotate_event(error_event(str(exc), recoverable=False, error_type="insufficient_quota" if is_quota_error(json.dumps(result)) else "response_error"), trace_meta)
+                return
+        trace_meta["model"] = result.get("model") or self.model
         # 模型没有返回choices，这意味着服务端没有生成任何内容
         choices = result.get("choices", [])
         if not choices:
@@ -1797,6 +1830,8 @@ class AsyncOpenAIRunner:
         # 真源约束：``content_complete.data`` = 已剥离 vendor 私有标签后的正文；
         # ``metadata.reasoning_content`` = 合并后的 reasoning（与 SSE 路径等价）。
         cc_kwargs_ns: Dict[str, Any] = {}
+        if native_output:
+            cc_kwargs_ns[NATIVE_OUTPUT_KEY] = native_output
         if merged_reasoning:
             cc_kwargs_ns["reasoning_content"] = merged_reasoning
         yield self._annotate_event(
@@ -1904,7 +1939,7 @@ class AsyncOpenAIRunner:
 
     def _annotate_event(self, event: StreamEvent, trace_meta: Dict[str, Any]) -> StreamEvent:
         metadata = dict(event.metadata) if event.metadata else {}
-        for key in ("run_id", "iteration_id", "request_id"):
+        for key in ("run_id", "iteration_id", "request_id", "attempt", "model"):
             if key in trace_meta:
                 metadata.setdefault(key, trace_meta[key])
         if event.type in {
@@ -1916,6 +1951,12 @@ class AsyncOpenAIRunner:
             tool_call_id = event.data.get("id") if isinstance(event.data, dict) else None
             if tool_call_id:
                 metadata.setdefault("tool_call_id", tool_call_id)
+        if event.type == EventType.METADATA and isinstance(event.data, dict) and "token_usage_summary" in event.data:
+            usage = event.data["token_usage_summary"]
+            if self.token_prices is not None:
+                cached = int(usage.get("cached_tokens") or 0)
+                uncached = max(0, int(usage.get("prompt_tokens") or 0) - cached)
+                usage["cost_estimate_usd"] = (uncached * self.token_prices["input"] + cached * self.token_prices["cached_input"] + int(usage.get("completion_tokens") or 0) * self.token_prices["output"]) / 1_000_000
         event.metadata = metadata
         return event
 

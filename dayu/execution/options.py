@@ -1239,7 +1239,7 @@ def apply_model_runner_runtime_overrides(
     """
 
     runner_type = normalize_runner_type(model_config.get("runner_type"))
-    if runner_type != RunnerType.OPENAI_COMPATIBLE:
+    if runner_type not in {RunnerType.OPENAI_COMPATIBLE, RunnerType.OPENAI_RESPONSES}:
         return resolved_execution_options
     runner_running_config = resolved_execution_options.runner_running_config
     if not isinstance(runner_running_config, OpenAIRunnerRuntimeConfig):

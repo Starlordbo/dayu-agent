@@ -149,7 +149,7 @@ def _build_runner_params(
 ) -> OpenAICompatibleRunnerParams | CliRunnerParams:
     """构造 runner 专属参数。"""
 
-    if runner_type == RunnerType.OPENAI_COMPATIBLE:
+    if runner_type in {RunnerType.OPENAI_COMPATIBLE, RunnerType.OPENAI_RESPONSES}:
         openai_model_config = cast(OpenAICompatibleModelConfig, model_config)
         endpoint_url = openai_model_config.get("endpoint_url")
         target_model = openai_model_config.get("model")
@@ -173,6 +173,8 @@ def _build_runner_params(
             "supports_tool_calling": bool(openai_model_config.get("supports_tool_calling", True)),
             "supports_stream_usage": bool(openai_model_config.get("supports_stream_usage", False)),
         }
+        if "token_prices" in openai_model_config:
+            openai_runner_params["token_prices"] = openai_model_config["token_prices"]
         return openai_runner_params
     raise ValueError(f"不支持的 runner_type: {runner_type}")
 

@@ -1438,5 +1438,46 @@
         }
       }
     }
+  },
+  "openai-responses": {
+    "runner_type": "openai_responses",
+    "endpoint_url": "https://api.openai.com/v1/responses",
+    "model": "{{OPENAI_RESPONSES_MODEL}}",
+    "headers": {
+      "Authorization": "Bearer {{OPENAI_API_KEY}}",
+      "Content-Type": "application/json"
+    },
+    "supports_stream": true,
+    "supports_tool_calling": true,
+    "max_retries": 3,
+    "description": "可选 Responses 配置；模型 ID 由本机 OPENAI_RESPONSES_MODEL 指定，不改变默认模型",
+    "runtime_hints": {
+      "temperature_profiles": {
+        "audit": {
+          "temperature": 1.0
+        },
+        "write": {
+          "temperature": 1.0
+        },
+        "prompt": {
+          "temperature": 1.0
+        },
+        "conversation_compaction": {
+          "temperature": 1.0
+        },
+        "interactive": {
+          "temperature": 1.0
+        },
+        "overview": {
+          "temperature": 1.0
+        },
+        "infer": {
+          "temperature": 1.0
+        },
+        "decision": {
+          "temperature": 1.0
+        }
+      }
+    }
   }
 }

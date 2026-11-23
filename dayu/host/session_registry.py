@@ -131,6 +131,16 @@ class SQLiteSessionRegistry(SessionRegistryProtocol):
                 """,
                 (session_id, source.value, SessionState.ACTIVE.value, scene_name, now_str, now_str, metadata_json),
             )
+            # 同一事务中首次绑定；已有绑定只能原样复用，跨进程并发不能抢改。
+            row_metadata = conn.execute("SELECT metadata_json FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
+            stored = normalize_execution_delivery_context(json.loads(row_metadata["metadata_json"] or "{}"))
+            for key in ("selected_model_name", "model_config_fingerprint"):
+                requested = normalized_metadata.get(key)
+                previous = stored.get(key)
+                if requested and previous and requested != previous:
+                    raise ValueError("会话模型或协议配置已变更，请新建会话")
+            merged = normalize_execution_delivery_context({**stored, **normalized_metadata})
+            conn.execute("UPDATE sessions SET metadata_json = ? WHERE session_id = ?", (json.dumps(merged, ensure_ascii=False), session_id))
             # 无论是否新插入，都 touch last_activity_at
             conn.execute(
                 "UPDATE sessions SET last_activity_at = ? WHERE session_id = ?",

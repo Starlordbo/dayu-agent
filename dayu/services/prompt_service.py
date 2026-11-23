@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import AsyncIterator, Callable
 
 from dayu.contracts.events import AppEvent
@@ -11,13 +11,14 @@ from dayu.host.protocols import HostedExecutionGatewayProtocol
 from dayu.services.concurrency_lanes import resolve_contract_concurrency_lane
 from dayu.services.contract_preparation import prepare_execution_contract
 from dayu.services.contracts import PromptRequest, PromptSubmission
+from dayu.services.internal.session_model import restore_session_model, session_model_metadata
 from dayu.services.internal.session_coordinator import ServiceSessionCoordinator
 from dayu.services.prompt_contributions import (
     build_base_user_contribution,
     build_optional_fins_subject_contribution,
 )
 from dayu.services.protocols import PromptServiceProtocol
-from dayu.services.scene_execution_acceptance import SceneExecutionAcceptancePreparer
+from dayu.services.scene_execution_acceptance import AcceptedSceneExecution, SceneExecutionAcceptancePreparer
 
 
 @dataclass
@@ -43,13 +44,17 @@ class PromptService(PromptServiceProtocol):
             KeyError: 显式续聊但 session 不存在时抛出。
         """
 
-        session = self._resolve_session(request)
+        request = replace(request, execution_options=restore_session_model(self.host, request.session_id, request.execution_options))
+        if not request.user_text.strip():
+            raise ValueError("Prompt 输入不能为空")
+        accepted_scene = self.scene_execution_acceptance_preparer.prepare("prompt", request.execution_options)
+        session = self._resolve_session(request, accepted_scene)
         return PromptSubmission(
             session_id=session.session_id,
-            event_stream=self._stream_in_session(request=request, session_id=session.session_id),
+            event_stream=self._stream_in_session(request=request, session_id=session.session_id, accepted_scene=accepted_scene),
         )
 
-    def _resolve_session(self, request: PromptRequest):
+    def _resolve_session(self, request: PromptRequest, accepted_scene: AcceptedSceneExecution):
         """解析 Prompt 请求对应的 Host session。"""
 
         user_message = str(request.user_text or "").strip()
@@ -64,6 +69,7 @@ class PromptService(PromptServiceProtocol):
             session_id=request.session_id,
             scene_name="prompt",
             policy=request.session_resolution_policy,
+            metadata=session_model_metadata(accepted_scene),
         )
 
     async def _stream_in_session(
@@ -71,6 +77,7 @@ class PromptService(PromptServiceProtocol):
         *,
         request: PromptRequest,
         session_id: str,
+        accepted_scene: AcceptedSceneExecution,
     ) -> AsyncIterator[AppEvent]:
         """在给定 session 中执行单轮 Prompt。
 
@@ -80,7 +87,6 @@ class PromptService(PromptServiceProtocol):
 
         user_message = str(request.user_text or "").strip()
 
-        accepted_scene = self.scene_execution_acceptance_preparer.prepare("prompt", request.execution_options)
         prompt_contributions = {
             "base_user": build_base_user_contribution(),
         }

@@ -38,3 +38,11 @@
 - 聊天历史读取与清空走 `ChatServiceProtocol` 的公开方法，不在 UI 侧直接读写 archive。
 - 聊天会话 ID 语义固定为公司级稳定键（`streamlit-web-{COMPANY_ID}`），避免同公司不同 ticker 写法割裂历史。
 - 自选股持久化边界由 `tests/application/test_streamlit_watchlist.py` 守护。
+
+### 对话模型选择
+
+Streamlit 交互页只展示已配置且在 interactive 场景允许名单内的模型。
+模型选择经线程 worker 的 `ExecutionOptions` 传给 ChatService；服务端 session
+元数据是续聊模型的真源，页面默认值不会覆盖它。“新建会话”将独立 ID 写入 URL，
+刷新可恢复同一会话；旧会话历史不会被删除。生成中禁用新建动作。
+报告页仍为占位实现，不会因页面刷新触发报告或模型请求。

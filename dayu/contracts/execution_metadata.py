@@ -21,6 +21,8 @@ class ExecutionDeliveryContext(TypedDict, total=False):
     interactive_key: str
     chat_key: str
     wechat_runtime_identity: str
+    selected_model_name: str
+    model_config_fingerprint: str
     filtered: bool
 
 
@@ -86,6 +88,13 @@ def normalize_execution_delivery_context(
     wechat_runtime_identity = _normalize_context_value(context.get("wechat_runtime_identity"))
     if wechat_runtime_identity:
         normalized["wechat_runtime_identity"] = wechat_runtime_identity
+
+    selected_model_name = context.get("selected_model_name")
+    if isinstance(selected_model_name, str) and selected_model_name:
+        normalized["selected_model_name"] = selected_model_name
+    fingerprint = context.get("model_config_fingerprint")
+    if isinstance(fingerprint, str) and fingerprint:
+        normalized["model_config_fingerprint"] = fingerprint
 
     filtered = context.get("filtered")
     if isinstance(filtered, bool):

@@ -1327,3 +1327,18 @@ dayu-render workspace/draft/AAPL/AAPL_qual_report.md report.html
 - 不要把仓库名称、作者名称或项目商标暗示成对你分发版本的背书
 
 如果你准备贡献代码、文档或测试，请先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
+### 使用 Responses 模型
+
+配置说明见 [dayu/config/README.md](dayu/config/README.md#可选-responses-模型)。配置好本机
+`OPENAI_API_KEY` 与 `OPENAI_RESPONSES_MODEL` 后，可显式选择 `openai-responses`；
+原有默认模型保持不变。
+
+- 网页交互式分析提供模型选择和“新建会话”。已有会话选择“默认”会沿用已保存的模型。
+  新会话 ID 保存在页面 URL 中，刷新同一 URL 可恢复；更换模型应新建会话。
+- CLI 对话可用 `dayu-cli interactive --model-name openai-responses`。
+- CLI 报告通过 `--model-name openai-responses` 同时覆盖主写作与原有核查场景；显式
+  `--audit-model-name` 仍可单独覆盖核查模型。不传模型参数时，各 scene 使用原默认值。
+- 网页报告页仍是占位页，其运行、进度、取消和产物接线属于尚未完成的报告页面工作。
+
+用量中的费用为估算，缺价格或失败请求的用量未知时会明确标记不完整，不是实际账单。

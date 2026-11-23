@@ -19,6 +19,7 @@ from dayu.engine.async_openai_runner import (
     AsyncOpenAIRunnerRunningConfig,
 )
 from dayu.engine.events import EventType, StreamEvent
+from dayu.contracts.model_config import RunnerType
 from dayu.engine.sse_parser import SSEStreamParser
 
 
@@ -26,9 +27,12 @@ class _MockRunner(AsyncOpenAIRunner):
     """绕过 aiohttp 初始化的轻量 runner，用于隔离测试受保护方法。"""
 
     def __init__(self, running_config: AsyncOpenAIRunnerRunningConfig) -> None:
+        self.api_protocol = RunnerType.OPENAI_COMPATIBLE
         self.running_config = running_config
         self.default_extra_payloads: Dict[str, Any] = {}
         self.name = "mock_runner"
+        self.model = "mock-model"
+        self.token_prices = None
 
 
 @pytest.fixture

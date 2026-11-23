@@ -779,3 +779,15 @@ Service 单测写"如何调 Host"时：
 10. `dayu/host/host_cleanup.py` — Host 包对装配期一次性会话残留清理的稳定 API（`purge_sessions_from_host_db`），由 UI 装配点在构造新 Host 之前 / 拆 service 时按 `host_db_path + session_ids` 直接调用。
 
 最后，任何与本文叙述冲突之处以代码为准；发现不一致请修正 README，而不是反过来。
+
+## 会话模型绑定与模型错误终态
+
+ChatService / PromptService 在首次受理时将模型配置名和身份指纹写入既有 session
+`metadata_json`（`selected_model_name`、`model_config_fingerprint`）。指纹只含协议、
+端点和实际模型 ID，不含密钥。SQLite 的 ensure 操作在同一事务内绑定并校验，
+续聊默认恢复原模型；改名、改协议、改端点或实际模型 ID 必须新建会话。
+恢复 pending turn 前也校验绑定；不另建会话系统或数据库表。
+
+Runner 的不可恢复错误会让 Host 将运行收敛为 FAILED，而不是因事件流正常结束
+而误记 SUCCEEDED。错误前的文本以 degraded 结果持久化。可恢复场景的 pending
+记录按原生命周期规则保留；恢复会重新执行原 prepared snapshot，不是工具级断点续跑。

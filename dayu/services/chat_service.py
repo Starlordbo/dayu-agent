@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import weakref
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import AsyncIterator, Callable
 
 from dayu.contracts.agent_execution import ExecutionContract
@@ -25,6 +25,8 @@ from dayu.services.contracts import (
     ChatTurnRequest,
     ChatTurnSubmission,
 )
+from dayu.execution.options import ExecutionOptions
+from dayu.services.internal.session_model import restore_session_model, session_model_metadata
 from dayu.services.internal.session_coordinator import ServiceSessionCoordinator
 from dayu.services.prompt_contributions import (
     build_base_user_contribution,
@@ -93,11 +95,13 @@ class ChatService(ChatServiceProtocol):
             KeyError: 显式续聊但 session 不存在时抛出。
         """
 
+        request = replace(request, execution_options=restore_session_model(self.host, request.session_id, request.execution_options))
         prepared_context = self._prepare_turn_context(request)
         session = self._session_coordinator().resolve(
             session_id=request.session_id,
             scene_name=prepared_context.scene_name,
             policy=request.session_resolution_policy,
+            metadata=session_model_metadata(prepared_context.accepted_scene),
         )
         # 同 session 并发提交按 FIFO 串行，避免在 Host 层因 revision 乐观锁
         # 冲突而静默丢弃后到达的请求。
@@ -137,6 +141,12 @@ class ChatService(ChatServiceProtocol):
                 "pending conversation turn 不属于当前 session: "
                 f"pending_turn_id={request.pending_turn_id}, session_id={session_id}"
             )
+        session = self.host.get_session(session_id)
+        selected = session.metadata.get("selected_model_name") if session else None
+        if selected and session:
+            restored_scene = self.scene_execution_acceptance_preparer.prepare(pending_turn.scene_name, ExecutionOptions(model_name=selected))
+            if session_model_metadata(restored_scene).get("model_config_fingerprint") != session.metadata.get("model_config_fingerprint"):
+                raise ValueError("会话模型或协议配置已变更，禁止恢复到其他供应商")
         return ChatTurnSubmission(
             session_id=pending_turn.session_id,
             event_stream=self.host.resume_pending_turn_stream(request.pending_turn_id, session_id=session_id),

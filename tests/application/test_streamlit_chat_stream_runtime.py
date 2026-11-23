@@ -86,11 +86,12 @@ class _StubChatService(ChatServiceProtocol):
         """
 
         self._submission = submission
+        self.requests: list[ChatTurnRequest] = []
 
     async def submit_turn(self, request: ChatTurnRequest) -> ChatTurnSubmission:
         """返回预置提交结果。"""
 
-        _ = request
+        self.requests.append(request)
         return self._submission
 
     async def resume_pending_turn(self, request: ChatResumeRequest) -> ChatTurnSubmission:
@@ -330,6 +331,7 @@ def test_run_stream_worker_emits_error_and_done_on_exception(monkeypatch: pytest
         event_queue: Queue[StreamQueueItem],
         cancel_event: threading.Event,
         trace_id: str,
+        model_name: str | None = None,
     ) -> None:
         _ = (chat_service, user_text, session_id, ticker, event_queue, cancel_event, trace_id)
         raise RuntimeError("worker failed")
@@ -360,3 +362,37 @@ async def _empty_event_stream() -> AsyncIterator[AppEvent]:
 
     if False:
         yield AppEvent(type=AppEventType.DONE, payload="")
+
+
+async def _empty_model_selection_stream() -> AsyncIterator[AppEvent]:
+    """提供无 HTTP 的终态事件。
+
+    Args:
+        无。
+    Returns:
+        空答案事件流。
+    Raises:
+        无。
+    """
+    yield AppEvent(type=AppEventType.FINAL_ANSWER, payload={"content": "ok"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model_name", [None, "openai-responses"])
+async def test_selected_model_reaches_service(model_name: str | None) -> None:
+    """网页选择传入 Service；默认选择不覆盖持久化会话模型。
+
+    Args:
+        model_name: 页面选择。
+    Returns:
+        无。
+    Raises:
+        AssertionError: 选项丢失或默认被覆盖。
+    """
+    service = _StubChatService(ChatTurnSubmission(session_id="s1", event_stream=_empty_model_selection_stream()))
+    await consume_chat_event_stream(chat_service=service, user_text="x", session_id="s1", ticker="AAA", event_queue=Queue(), cancel_event=threading.Event(), trace_id="model-test", model_name=model_name)
+    options = service.requests[0].execution_options
+    if model_name is None:
+        assert options is None
+    else:
+        assert options is not None and options.model_name == model_name
