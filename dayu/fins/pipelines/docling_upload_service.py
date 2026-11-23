@@ -19,7 +19,7 @@ import mimetypes
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Callable, Literal, Optional
+from typing import Any, Callable, Literal, Mapping, Optional
 
 from dayu.fins.docling_export import convert_pdf_bytes_to_docling_payload
 from dayu.fins.domain.document_models import (
@@ -29,9 +29,13 @@ from dayu.fins.domain.document_models import (
     now_iso8601,
 )
 from dayu.fins.domain.enums import SourceKind
+from dayu.fins.pipelines.json_types import JsonValue
 from dayu.fins.storage import DocumentBlobRepositoryProtocol, SourceDocumentRepositoryProtocol
 from dayu.fins.ticker_normalization import try_normalize_ticker
 from dayu.log import Log
+
+# 转换后质量否决回调：返回不可问答原因，返回 None 表示可入库。
+ConversionAssessor = Callable[[Mapping[str, JsonValue]], Optional[str]]
 
 SUPPORTED_UPLOAD_SUFFIXES = frozenset(
     {
@@ -101,6 +105,7 @@ class DoclingUploadService:
         blob_repository: DocumentBlobRepositoryProtocol,
         *,
         convert_with_docling: Optional[Callable[[bytes, str], dict[str, Any]]] = None,
+        assess_docling: Optional[ConversionAssessor] = None,
     ) -> None:
         """初始化服务。
 
@@ -108,6 +113,7 @@ class DoclingUploadService:
             source_repository: 源文档仓储实现。
             blob_repository: 文档文件对象仓储实现。
             convert_with_docling: 可选 Docling 转换函数（测试可注入）。
+            assess_docling: 可选转换结果质量否决回调；返回原因即拒绝入库。
 
         Returns:
             无。
@@ -121,6 +127,7 @@ class DoclingUploadService:
         if blob_repository is None:
             raise ValueError("blob_repository 不能为空")
         self._source_repository = source_repository
+        self._assess_docling = assess_docling
         self._blob_repository = blob_repository
         self._convert_with_docling = convert_with_docling or _convert_bytes_with_docling
 
@@ -443,6 +450,11 @@ class DoclingUploadService:
                 )
             )
             docling_payload = self._convert_with_docling(original_asset.data, file_path.name)
+            if self._assess_docling is not None:
+                reject_reason = self._assess_docling(docling_payload)
+                if reject_reason is not None:
+                    # 转换成功但内容不可问答：拒绝入库，避免坏材料被登记为已处理。
+                    raise RuntimeError(f"转换结果不可问答: {file_path.name}: {reject_reason}")
             docling_data = json.dumps(docling_payload, ensure_ascii=False, indent=2).encode("utf-8")
             docling_name = f"{file_path.stem}{DOCLING_FILE_SUFFIX}"
             docling_sha256 = hashlib.sha256(docling_data).hexdigest()

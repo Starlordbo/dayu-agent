@@ -10,9 +10,10 @@ from dayu.fins.pipelines.earnings_call_quality import (
     REASON_EMPTY_TEXT,
     REASON_GARBLED_TEXT,
     REASON_PAGE_ORDER_BROKEN,
-    JsonValue,
+    assess_conversion_reason,
     assess_docling_payload,
 )
+from dayu.fins.pipelines.json_types import JsonValue
 
 
 def _payload(texts: list[tuple[str, int | None]]) -> dict[str, JsonValue]:

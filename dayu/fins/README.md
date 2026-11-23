@@ -477,6 +477,10 @@ python utils/retriage_active_6k_filings.py --base workspace --tickers ALC,ASM,NV
 指纹必须使用 `docling_upload_service.build_upload_source_fingerprint`：它复用上传服务内部的
 `source_fingerprint` 规则，自行计算文件哈希会导致与仓储中的指纹格式不一致，把每次重传都误判为冲突。
 
+转换后质量门在 `dayu/fins/pipelines/earnings_call_quality.py`：空正文、替换字符占比过高的乱码、
+页号回退判为不可问答，由 `DoclingUploadService(assess_docling=...)` 在入库前否决（默认不启用，
+只由纪要上传接线注入）。回退原因码为 `empty_text` / `garbled_text` / `page_order_broken`。
+
 ## 6. Ticker 归一化真源
 
 所有 ticker 的归一化都统一收敛到 `dayu/fins/ticker_normalization.py`：

@@ -9,11 +9,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping, Optional, Union
+from typing import Mapping, Optional
 
-# Docling 导出字典的 JSON 值类型；用递归别名代替 Any/object，保持严格类型检查。
-JsonScalar = Union[str, int, float, bool, None]
-JsonValue = Union[JsonScalar, list["JsonValue"], dict[str, "JsonValue"]]
+from dayu.fins.pipelines.json_types import JsonValue
 
 # 判定结论：可问答 / 不可问答。
 MATERIAL_READY: str = "ready"
@@ -129,3 +127,20 @@ def assess_docling_payload(payload: Mapping[str, JsonValue]) -> MaterialQuality:
         max_page = page_no
 
     return MaterialQuality(ready=True, reason=MATERIAL_READY, text_chars=text_chars)
+
+
+def assess_conversion_reason(payload: Mapping[str, JsonValue]) -> Optional[str]:
+    """把质量判定压缩为“不可问答原因”。
+
+    Args:
+        payload: Docling `export_to_dict()` 结果。
+
+    Returns:
+        可问答时返回 `None`；不可问答时返回具体原因码。
+
+    Raises:
+        无。
+    """
+
+    quality = assess_docling_payload(payload)
+    return None if quality.ready else quality.reason
