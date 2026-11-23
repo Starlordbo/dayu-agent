@@ -163,3 +163,10 @@ Research OS 的 `scripts/native_dayu_bridge.py` 仅作为已有协议转换经�
 - 已覆盖验收项：U1–U15、S1、S2、S4、S5、S6；S7 的判定逻辑已有单测，服务层与否决链路共用同一函数。
 - 未覆盖：S3 真实“上传成功但处理失败”部分状态（只验证到决策层）、S8 的 web 层入口、W1–W7 网页接线、四格式真实端到端、P3 报告页。
 - 下一步：新增公司资料页多文件上传（Streamlit），接 `build_batch_plan` + `execute_batch` + 质量门，并补 W1–W7 测试。
+
+### 2026-11-23：P2 网页切片（会议纪要上传 Tab）
+
+- 新增 `dayu/web/streamlit/pages/material_tab.py` 并接入主功能区第四个 Tab（📞 会议纪要）：多文件上传、逐文件推断财季、逐文件提交既有 `upload_material` 命令（`stream=False` 取同步结果）。
+- 单文件失败隔离为结果行；页面按批次指纹（文件名 + 字节数）去重，重绘不重复提交；财季不可确认的文件要求勾选确认，缺财年/财季的行标记 `pending_confirmation`。
+- 验证：`tests/application/test_material_tab.py` 7 passed（W1–W4），`tests/application` 全量 + P2 单测合计 1039 passed；pyright 0 errors。
+- 未覆盖：W5–W7（引用点击定位、文档级/章节级标注、分析师与管理层区分）依赖原文查看入口；真实浏览器交互与四格式端到端仍待验收。
