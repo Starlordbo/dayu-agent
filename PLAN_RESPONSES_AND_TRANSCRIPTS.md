@@ -1,6 +1,6 @@
 # Dayu Agent 开发计划：Responses API 与网页纪要上传
 
-更新日期：2026-11-23。状态：P1 已完成离线实现与验证；P2、P3 及真实模型/网页质量验收尚未完成。离线通过不代表真实研究质量通过。
+更新日期：2026-11-23。状态：P1 已完成实现与连通验证；P2 上传恢复、四格式 Runtime 集成与来源查看切片已实现，仍缺真实浏览器/模型质量验收及网页正文元数据预填；P3 未开始。自动化通过不代表真实研究质量通过。
 
 ## 1. 仓库与开工位置
 
@@ -170,3 +170,23 @@ Research OS 的 `scripts/native_dayu_bridge.py` 仅作为已有协议转换经�
 - 单文件失败隔离为结果行；页面按批次指纹（文件名 + 字节数）去重，重绘不重复提交；财季不可确认的文件要求勾选确认，缺财年/财季的行标记 `pending_confirmation`。
 - 验证：`tests/application/test_material_tab.py` 7 passed（W1–W4），`tests/application` 全量 + P2 单测合计 1039 passed；pyright 0 errors。
 - 未覆盖：W5–W7（引用点击定位、文档级/章节级标注、分析师与管理层区分）依赖原文查看入口；真实浏览器交互与四格式端到端仍待验收。
+
+### 2026-11-23：P2 恢复、四格式与可核验原文切片
+
+- 实现提交：`beed209`（`feat/p2-earnings-transcripts`）。本记录及验收/交接文档作为后续独立文档提交，推送和远端 HEAD 核对结果在交付回执中确认。
+- S3：真实上传后在快照导出点注入失败，恢复时只再次 process；document_id、源元数据和原件不变。只有 processed 或 version_matched 才是本次操作的可问答状态，不把 uploaded/ingest_incomplete 当成功。
+- S6–S8：纪要默认质量门；同身份不同指纹拒绝覆盖，用户可修改标题另存。SEC/A股/港股入口均在 reset 前拒绝 overwrite。指纹继续使用仓储的 name/sha256/size/source 契约。
+- W1–W4：逐文件状态、编辑确认、公司及内容隔离的检查点、重试只恢复处理；持久材料目录显示真实标题/财季/来源。已入库目录不等同处理就绪，页面 READY 是历史操作检查点，不是外部 CLI 删改的实时监控。
+- W5–W7：历史/流式/终态 assistant 输出统一解析机器来源，保留会话参数，区分文档/章节范围。只读 Service 聚合真实公司/材料/财季/目录/正文；原文路由先于侧栏，跨公司同ID不混淆，删除/未完整入库明确失败，无上传/处理/Agent副作用。
+- 明确独立身份行派生角色、发言形式、原文范围与身份依据；未知不猜。真实四格式集成暴露 Docling 压平段落的根因，已保留块间/块内换行。引擎与业务 parser 版本均提升，旧处理快照需重新 process；没有持久化 schema 变更。
+- 四格式证据是材料页执行函数 → 真实 FinsService/Runtime/Docling/仓储/预处理 → 列表/搜索/读段 → 来源标记与只读解析，Host 外壳为测试替身。另用无头 AppTest 验证控件接线，**不拼称真实浏览器 E2E**。
+- 独立复核确认并修复两个真实遗漏：不支持的显式行内标签曾继承管理层身份；目录 URL 更新但不 rerun 会吞掉下一次连续选择。新增已知身份→英文/中文/Markdown行内标签、无损范围与连续目录选择回归，评审原反例复验通过。
+- 最终检查：
+  - 核心 `tests/engine tests/fins tests/contracts tests/services tests/architecture`：**4089 passed、2 skipped、4 warnings**，106.24s。
+  - 应用 `tests/application`：**1171 passed、1 warning**，34.51s。两组共 **5260 passed、2 skipped**，不是整个 `tests/` 目录的全量结果。
+  - 引用 Tool Service 最后补验：95 passed；全仓 pyright：0 errors / 0 warnings / 0 informations。
+  - 合并两组 branch coverage 后，17 个改动生产 Python 文件逐个检查均达到80%目标，实际范围 **90.51%–100%**。聊天页97.61%，材料页94.63%，入口93.33%，引用解析/原文查看器/身份解析均100%。没有用 aggregate 掩盖单文件缺口。
+  - 11 个首次核心失败归因为旧模型白名单断言未包含已经存在的 openai-responses，已只更新测试并补 workspace 覆盖隔离；默认模型断言保持不变。
+  - 最终日志：`workspace/tmp/p2-validation/regression-core-reviewed.log`、`regression-application-complete.log`、`regression-citation-service.log`、`pyright-complete.log`、`coverage-complete.json`；日志、缓存和运行仓储不提交。最终 diff 审查及 `git diff --check` 通过。
+- 仍未完成：真实浏览器多文件上传/来源点击/刷新返回、真实模型答案质量验收；页面目前只按文件名自动预填，标题/开场声明识别尚未接入页面自动提取。PDF只覆盖自撰单页文字样本，角色识别不支持无证据推断或跨章节身份继承。P2不能宣称全量验收，P3未实施。
+- 下一步从 `docs/p2-continuation.md` 继续，先补上述真实验证与元数据预填缺口，不直接跳到P3。

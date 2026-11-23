@@ -61,20 +61,21 @@
 | S7 | 段落顺序损坏 | 判为不可问答并说明原因 |
 | S8 | 调用带 overwrite 的老路径 | 首版拒绝破坏性覆盖 |
 
-进度说明：S1、S2、S4、S5 已由 `tests/fins/test_earnings_call_upload_adapter.py`
-通过真实文件系统仓储 + 既有上传服务验证；S6、S7 在服务层验证
-（`tests/fins/test_docling_upload_service_quality_gate.py`：转换结果不可问答时入库前否决）；
-S3 目前只验证到决策层（resume → update），真实“上传成功但处理失败”的部分状态
-需要在网页接线时用可注入的失败点复测。
+自动化证据：
 
-网页层：W1（逐文件条目）、W2（结果映射与失败展示）、W3（批次指纹去重）、W4（upload_material 请求构造）
-已由 `tests/application/test_material_tab.py` 覆盖；W5–W7（引用点击定位、文档/章节标注、分析师与管理层区分）
-依赖原文查看入口，尚未接线；真实浏览器交互未验收。
+- S1/S2/S4/S5：`tests/fins/test_earnings_call_upload_adapter.py` 的真实文件系统仓储 + 上传编排；页面逐项处理与失败隔离由 `test_material_tab.py` / `test_material_tab_render.py` 覆盖。
+- S3：`tests/application/test_material_upload_integration.py::test_s3_real_uploaded_material_resumes_without_upload_or_second_material`在真实快照导出点注入失败；检查同一 document_id、原件与源 meta 未改变，命令顺序 upload → process失败 → process成功，无旧页面检查点时同指纹仍跳过转换。
+- S6/S7：`test_docling_upload_service_quality_gate.py` 验证纪要默认启用质量门且入库前否决；其他材料保留原默认行为。
+- S8：`test_earnings_call_upload_safety.py` 与 `test_material_upload_integration.py` 验证美股/A股/港股入口在 reset 前拒绝 overwrite，原件与元数据不变。
+- W1–W4：材料页单测、AppTest 与真实入库目录覆盖逐文件状态、失败单独重试、rerun不重提、公司隔离、编辑确认及持久标题/财季列表。旧记录把 W4 等同“请求构造”并不充分，本轮补上目录证据。
+- W5–W7：`test_streamlit_citations.py`、`test_document_reference_service.py`、`test_streamlit_source_viewer.py` 覆盖机器引用、真实原文聚合、目录选择/刷新、全文兜底与明确身份行证据。真实上传曾暴露段落边界压平，已修正 Docling 正文读取并由混合问答回归保护。
+
+以上是单测、Runtime 集成与无头 AppTest，不是浏览器人工点击验收，也不证明模型一定遵守引用或角色规则。
 
 ## 3. 网页层
 
 落点：`dayu/web/streamlit/pages/`；
-测试：`tests/application/test_upload_page_*.py`（新增，仿 `test_streamlit_chat_stream_runtime.py` 的无头断言）。
+测试：`tests/application/test_material_tab*.py`、`test_streamlit_citations.py`、`test_streamlit_source_viewer.py`、`test_streamlit_source_routing.py`；其中路由测试调用真实 `streamlit_app.main()`，验证来源身份不被侧栏公司覆盖。
 
 | # | 用例 | 期望 |
 |---|---|---|
@@ -88,10 +89,14 @@ S3 目前只验证到决策层（resume → update），真实“上传成功但
 
 ## 4. 真实格式端到端
 
-fixtures 目录：`tests/fixtures/earnings_call/`（脱敏副本，不含真实敏感材料）。
+fixtures 目录：`tests/fixtures/earnings_call/`（项目自撰合成样本，四份内容相同，不含真实敏感材料）。
 
-Markdown、TXT、DOCX、文字型 PDF 各一，每种都走完：网页上传 → 转换 → 预处理 → 按公司/财季搜索 → 读出 → 点击定位。
+目标链路：Markdown、TXT、DOCX、文字型 PDF 各一，每种都走完网页上传 → 转换 → 预处理 → 按公司/财季搜索 → 读出 → 点击定位。
 空文本或段落乱序都算失败，不接受“看起来成功”。
+
+当前证据：`test_four_formats_real_upload_process_discover_search_read` 对四种格式走材料页执行函数 → 真实 FinsService / Runtime / Docling / 预处理 / 仓储 → list/search/read_section → 机器来源 → UI链接解析 → 真实只读来源Service。
+宿主执行外壳替换为测试 Host，不调用 Agent/LLM；上传与查看器的浏览器控件另由 AppTest 覆盖，不能拼称完整浏览器 E2E。
+断言保留实际42 million、分析师100 million假设及管理层否认，片段角色、身份依据和字符范围正确；无标题 MD/TXT 另验证文档级全文兜底。
 
 ## 5. 回归
 
@@ -108,6 +113,36 @@ P1 相关与既有上传测试不得新增失败：
 
 ## 6. 通过标准与证据
 
-- 结果目录 `workspace/tmp/p2-validation/<timestamp>/`（不提交）；
+- 结果目录 `workspace/tmp/p2-validation/`，按验证批次分别命名日志与覆盖率文件（不提交）；
 - 失败分类：协议接线 / 文件解析 / 网页接线 / 资料缺口，不用新规则掩盖；
 - 完成后在 `PLAN_RESPONSES_AND_TRANSCRIPTS.md` 底部追加记录（提交号、跑过的检查、未覆盖项）。
+
+### 本轮自动化交付记录（2026-11-23，`beed209`）
+
+| 检查 | 结果 |
+|---|---|
+| engine/fins/contracts/services/architecture | 4089 passed，2 skipped，4 warnings |
+| application 全目录 | 1171 passed，1 warning |
+| 引用 Tool Service 补验 | 95 passed（不重复计入两组总数） |
+| 全仓 pyright | 0 errors / 0 warnings / 0 informations |
+| 17个改动生产 Python 文件，合并 branch coverage | 逐个均≥80%；最低90.51%，最高100% |
+
+两组共5260项通过；未声称运行整个 `tests/` 目录。日志和覆盖率在本轮 `workspace/tmp/p2-validation/` 下的 `regression-core-reviewed.log`、`regression-application-complete.log`、`regression-citation-service.log`、`pyright-complete.log`、`coverage-complete.json`，均不提交。
+
+补充直接回归：
+
+- `test_earnings_call_passages.py`：94例；明确行内标签只建立 unknown 边界，前序管理层/分析师/主持人身份不能泄漏，原文范围无损且不误切URL/时间。
+- `test_streamlit_source_viewer.py`：21例，包含连续选择不插入额外刷新；与16例真实只读Service验证共同保护目录/URL/正文一致。
+- `test_streamlit_source_routing.py`：13例真实入口，入口覆盖率93.33%；不启动替代服务器。
+- `test_streamlit_chat_render.py`：18例真实AppTest及离线Service事件，聊天页覆盖率97.61%；历史/流式/终态三处都直接检查链接与会话参数。
+- `test_docling_source_boundaries.py`：引擎及业务processor均保留段落；两层parser版本一并更新，旧快照需重新处理，无schema迁移。
+
+独立复核发现的身份继承泄漏与连续目录选择失效均已修复，原反例复验通过。既有11个模型白名单失败归因后只修正测试与覆盖隔离断言，不改变默认模型。
+
+## 7. 未完成的产品验收
+
+- 未执行真实浏览器多文件上传、点击来源、前进/后退/刷新及真实模型答案引用验收；AppTest/Runtime 集成不替代这些步骤。
+- 网页财季自动推断当前仅用文件名，标题初值也来自文件名；可逐文件编辑核对。底层标题/开场声明识别单测通过，不代表页面已经自动读取两类信息。
+- 不从行内换人、跨章节姓名或没有角色标签的内容推断新身份。显式冒号行内标签只切断上一个身份的继承并标为 unknown，不做语义问答推断；无法识别的边界仍需原文核验。
+- PDF仅覆盖文字型单页合成样本，不含OCR或页内高亮；质量门的顺序检查依赖可核验页序信号，不证明同页语义顺序正确。
+- P3报告页仍不在本轮范围。P2自动化切片可交付，但以上未覆盖项完成之前不宣称P2全部验收通过。

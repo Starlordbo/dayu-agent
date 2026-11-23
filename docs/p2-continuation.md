@@ -1,72 +1,77 @@
 # P2 交接文档（新会话从这里接续）
 
-用途：新会话（默认模型 `openai/gpt-6-astra`，带多模型子代理路由）在不依赖旧会话上下文的情况下继续 P2。
-最近更新：2026-11-23。
+用途：不依赖旧会话上下文继续验证 P2。最近更新：2026-11-23。
 
-## 1. 代码位置
+## 1. 代码位置与范围
 
-- 工作副本：`/Users/bobai/Documents/deepseek-harness/default-workspace/dayu-work`（会话 workspace 内，提交/推送无需审批）
-- 分支：`feat/p2-earnings-transcripts`（基于 `feat/responses-p1`，P1 已在其中）
-- 远端：`https://github.com/Starlordbo/dayu-agent`
-- 基线提交：见 `git log --oneline -5`
-- 原克隆 `/Users/bobai/Documents/Codex/2026-11-23/.../dayu-agent` 未被改动，需要时 `git pull`
+- 工作副本：`/Users/bobai/Documents/deepseek-harness/default-workspace/dayu-work`
+- 分支：`feat/p2-earnings-transcripts`；远端：`https://github.com/Starlordbo/dayu-agent`
+- 当前切片提交与最终检查结果见 `PLAN_RESPONSES_AND_TRANSCRIPTS.md` 末尾；先执行 `git status --short`、`git log --oneline -5` 核对。
+- 旧克隆没有被本轮修改。`.venv` 是指向旧环境的符号链接，不修改环境依赖。
+- **P2 尚未全量产品验收；P3 报告页不在本轮范围。**
 
-## 2. 已完成的切片
+## 2. 当前已实现且有自动化证据的切片
 
-| 提交 | 内容 |
+| 能力 | 直接证据 |
 |---|---|
-| `b8d4120` | 批量调度接真实 `DoclingUploadService`；暴露 `build_upload_source_fingerprint` |
-| `3dbf3c6` | 转换质量判定 `assess_docling_payload`（空正文/乱码/页序回退） |
-| `4dd5922` | 质量门接入 `DoclingUploadService(assess_docling=...)`，入库前否决 |
-| `725b8fa` | Streamlit「📞 会议纪要」Tab：多文件、逐文件状态、批次去重 |
-| `578ca1c` / `129aff8` | 计划文档与验收进度留痕 |
+| 上传后必须 process 才显示本次操作可问答；处理失败只重试 process；无旧页面检查点时同指纹不重复转换 | `tests/application/test_material_upload_integration.py` 的 S3 真实快照导出失败注入 |
+| 纪要默认质量门；同身份不同内容不覆盖；SEC/A股/港股在 reset 前拒绝 overwrite | `tests/fins/test_docling_upload_service_quality_gate.py`、`test_earnings_call_upload_safety.py` 与 S8 集成 |
+| MD/TXT/DOCX/文字型PDF真实上传、处理、列表、搜索、读段、引用链接与只读定位 | `test_material_upload_integration.py`，合成样本在 `tests/fixtures/earnings_call/` |
+| 材料页逐文件确认、内容指纹、去重控件、持久材料目录 | `test_material_tab.py`、`test_material_tab_render.py` |
+| 历史/流式/终态回答中的机器来源转成安全链接；文档级不冒充章节级 | `test_streamlit_citations.py`、`test_streamlit_chat_render.py`，全文兜底 MD/TXT 集成 |
+| 指定公司/文档/章节的只读原文头、目录与正文；跨公司同ID隔离；删除/未完整入库拒绝 | `test_document_reference_service.py` |
+| 真实入口先路由来源再显示侧栏，刷新/连续选择不丢定位，保留聊天参数 | `test_streamlit_source_routing.py`、`test_streamlit_source_viewer.py` |
+| 明确独立身份行派生角色/形式/原文范围及证据；不支持的明确行内标签切断身份继承 | `test_earnings_call_passages.py`；真实四格式问答对照 |
 
-验收项覆盖（详见 `docs/p2-verification.md`）：U1–U15、S1、S2、S4、S5、S6、W1–W4。
+以上区分清楚：Runtime 集成使用测试宿主外壳；AppTest 是无头控件接线测试；**两者都不是浏览器人工验收或真实模型研究质量验证**。
 
-## 3. 关键设计决策（改之前先读，避免回退）
+## 3. 不可回退的契约
 
-1. **指纹必须用 `build_upload_source_fingerprint`**
-   服务内部指纹是 `name+sha256+size+source` 的结构化哈希；自算 sha256 会与仓储 `source_fingerprint` 格式不一致，把每次重传都判成冲突。
-2. **EARNINGS_CALL 的 Q4 不升级为 FY**
-   `infer_earnings_call_fiscal` 取“最先出现的声明”定主口径：`Q4 and Full Year 2023` → Q4，`Full Year 2023 with Q4 details` → FY；同源出现两个不同季度判冲突并要求确认。
-3. **质量门在 upsert 前**
-   转换成功但空正文/乱码/页序回退 → `RuntimeError` 让该文件失败，不留 `ingest_complete=True` 的坏材料。
-4. **网页上传用同步结果**
-   `upload_material` 以 `stream=False` 提交，逐文件立即得状态；页面用批次指纹（文件名+字节数）去重，重绘不重复提交。
-5. **一个文件 = 一个材料**
-   不把多季或 slides/transcript 合并成一个材料包。
+1. 仓储指纹使用 `build_upload_source_fingerprint`，包含 name、sha256、size、source，不用裸 SHA 替代。
+2. 一个文件一个 `EARNINGS_CALL`，Q4 不升级为 FY；歧义需确认，不合并多季/slides/transcript。
+3. 质量门在原件入库前；纪要首版禁止破坏性 overwrite，也不添加修订框架。
+4. 上传 Runtime 成功是 `ok`，内部服务成功是 `uploaded`；只接受同指纹 `skipped/already_uploaded`。
+5. 处理只有 `processed` 或 `skipped/version_matched` 算就绪；`ingest_incomplete` 不是成功。页面 READY 是本次操作检查点，不是持续监控外部 CLI 删改的实时状态。
+6. 页面检查点键包含公司、文件名、标题/财季与内容哈希；仅在已上传后保存 document_id。持久材料目录只说明入库，不自动等同处理就绪。
+7. 来源身份必须含 ticker + document_id；机器标记形如 `[[source:TICKER|DOCUMENT_ID|REF]]`，各分量规范编码。全文兜底只给两分量的文档级标记。
+8. 查看器通过 Service / Tool Service / 仓储读取已存 Docling 原文，不启动 Agent、不重新转换、不从自然语言标题猜 ref。
+9. 身份与问句形式独立；分析师假设不能升级为公司指引，无法证明则 unknown。Docling 正文必须保留块间/块内换行，否则独立身份行会被损坏。
+10. 引擎与业务 Docling parser version 均已更新（`docling_processor_v1.2.0` / `fins_docling_processor_v1.1.0`）。业务类覆盖父类版本，不能只改父类。已有快照需重新处理；本轮没有持久化 schema 变更。
 
-## 4. 未完成项（按建议顺序）
+## 4. 接下来优先验证
 
-1. **S3 真实部分状态**：给上传编排加可注入失败点，验证“上传成功但处理失败 → 只恢复处理”。
-2. **四格式真实端到端**：md / txt / docx / 文字型 PDF 各一份，走完上传→转换→搜索→读取→定位。
-   - 已实测（真实 Docling，本机 mps）：`.md` 3 items / 74 chars、`.txt` 3 items / 74 chars、`.docx` 3 items / 74 chars、`.pdf` 6 items / 274 chars，四种全部 `ready`。
-   - 结论：Docling 接受全部四种格式，端到端验收不需要额外格式适配；fixtures 可用 `python-docx` 生成 docx、文本写 md/txt、PDF 复用 `tests/fixtures/docling/dayu_docling_integration_fixture.pdf`。
-3. **W5–W7 引用定位**：引用点击跳到原文对应章节、文档级与章节级分别标注、分析师提问与管理层回应可区分；需先读现有原文查看入口。
-4. **P3 报告页**：`report_tab` 占位换成真实 `WriteService`。
-5. 扩大回归里既有的 13 failed + 2 errors（P1 记录）仍需逐项归因。
+1. **真实浏览器验收**：四格式多选上传、逐项失败与重试、来源点击、连续目录切换、刷新/返回会话及跨公司身份隔离。
+2. **真实模型答案验收**：工具 citation.source_marker 原样保留，章节/文档范围与角色证据正确，不把100 million分析师假设写成公司预测。
+3. **网页正文元数据预填缺口**：当前只按文件名推断财季、初填标题，用户可编辑。底层标题/开场声明规则单测不代表页面已自动提取；不得写成该能力完成。
+4. **样本扩展**：目前是自撰单页文字型PDF与清晰身份行；未验收OCR、复杂真实PDF排版或跨章节身份继承。无依据维持未知，不能为了多识别而猜角色。
+5. 如后续需要持续反映外部 CLI 删改/版本变化，需给页面历史 READY 检查点增加明确的只读重检契约，不能把普通 rerun 变成重复转换/处理。
 
-## 5. 环境与命令
+不要把上述未验收项带过后直接跳到 P3。
+
+## 5. 环境与检查命令
+
+从工作副本运行：
 
 ```bash
-cd /Users/bobai/Documents/deepseek-harness/default-workspace/dayu-work
-# 测试（必须带 EDGAR 与 HF 缓存重定向，否则会被沙箱挡住）
+source .venv/bin/activate
 EDGAR_LOCAL_DATA_DIR="$PWD/workspace/tmp/edgar" HF_HOME="$PWD/.cache/hf" \
-  .venv/bin/python -m pytest tests/fins/test_earnings_call_*.py tests/application/test_material_tab.py -q -p no:cacheprovider
-# 类型检查（pyrightconfig 排除了 .venv，需显式给 pythonpath）
-.venv/bin/pyright --pythonpath .venv/bin/python <files>
+  python -m pytest tests/engine tests/fins tests/contracts tests/services \
+    tests/architecture tests/application -q -p no:cacheprovider
+pyright --pythonpath .venv/bin/python
 ```
 
-提交与推送（工作副本在 workspace 内，无需审批；push 用凭据库里的 `GITHUB_TOKEN`）：
+- 缓存重定向避免第三方 Edgar/Hugging Face 默认写入工作区外；不要修改系统或虚拟环境来绕过测试配置。
+- 并行覆盖率必须用独立 `COVERAGE_FILE`。使用目录目标（如 `--cov=dayu --cov-branch`），避免模块目标引发 NumPy 提前导入错误。
+- 本轮旧的11个核心失败均是测试白名单漏掉已有 `openai-responses`，不是默认模型变更；已更新明确白名单并补 package/workspace 配置隔离回归。默认 thinking-plan/plan 模型断言保留。
+- 自动化日志与覆盖率留在 `workspace/tmp/p2-validation/`，不提交缓存、模型数据、运行仓储或凭据。
+
+提交使用既有作者信息与安全认证配置；不要把 token 写进 remote URL、文档或日志：
 
 ```bash
 git -c user.name="Starlordbo" -c user.email="190903854+Starlordbo@users.noreply.github.com" commit -m "..."
-TOK=$(python3 -c "import re,pathlib;print(re.search(r'^\s*GITHUB_TOKEN\s*:\s*(\S+)', pathlib.Path.home().joinpath('.dsh/.credentials.yaml').read_text(), re.M).group(1))")
-git -c credential.helper= -c http.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOK" | base64)" push origin feat/p2-earnings-transcripts
+git push origin feat/p2-earnings-transcripts
 ```
 
 ## 6. 协作约定
 
-- 每次改动：先读现有实现与测试 → 改 → 跑受影响测试 → pyright → 同步 `dayu/fins/README.md` 或 `dayu/web/README.md` → 在 `PLAN_RESPONSES_AND_TRANSCRIPTS.md` 底部追加记录 → 提交推送
-- 独立评审可派 `subagent_codex`（一次性、自包含 prompt，只读评审）
-- 只有真正的产品取舍（交互形态、默认模型、数据缺口处理）才停下来问用户
+先读实际实现与测试，再修改；每个代理独占文件；整合者审查最终 diff、跑受影响测试与全仓 pyright、同步各 README 和验收记录后再提交推送。只读独立评审必须用直接复现区分缺陷与已知未覆盖项。
