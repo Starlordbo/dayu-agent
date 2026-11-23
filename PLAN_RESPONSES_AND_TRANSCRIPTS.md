@@ -151,3 +151,15 @@ Research OS 的 `scripts/native_dayu_bridge.py` 仅作为已有协议转换经�
 - Astra：4 次请求，输入 16,728、其中缓存命中 11,797、输出 262 token。DeepSeek：4 次请求，输入 19,428、其中缓存命中 15,616、输出 380 token。未配置价格表，未核对账单，不报告实际费用。
 - 本次证明流式、工具回传、会话保持及用量记录；仍不证明真实财报研究质量、浏览器交互、取消或工具级中点恢复。P2/P3 未开始，扩大回归的既有失败仍需处理。
 - 用户已修改本机 Codex 配置为 `sandbox_workspace_write.network_access=true` 并重启，但代理命令进程仍携带 `CODEX_SANDBOX_NETWORK_DISABLED=1`，两家 DNS 查询失败。当前会话策略仍为受限网络且不允许沙箱提权；现有应用工具未提供更改该策略的入口，read_thread 返回应用工具请求错误。不能将配置文件已修改表述为代理联网已恢复，也不继续要求用户重复重启或截图。
+
+### 2026-11-23：P2 后端切片（识别 / 批量调度 / 质量门）
+
+- 工作副本改为 workspace 内克隆 `dayu-work`（分支 `feat/p2-earnings-transcripts`，基线 `b8d4120` 之后继续），原克隆与旧 worktree 未再改动。
+- 已完成并推送：
+  - `b8d4120` 批量调度接真实上传服务；暴露 `build_upload_source_fingerprint`，避免自算指纹与仓储 `source_fingerprint` 格式不一致而把每次重传误判为冲突。
+  - `3dbf3c6` 转换质量判定 `assess_docling_payload`（空正文 / 乱码 / 页序回退）。
+  - `4dd5922` 质量门接入 `DoclingUploadService(assess_docling=...)`，在入库前否决不可问答的转换结果。
+- 验证：P2 单测 40 passed；上传相关回归 61 passed（含 Docling 集成 2 项，`HF_HOME` 指向 workspace 内缓存）；pyright 0 errors。
+- 已覆盖验收项：U1–U15、S1、S2、S4、S5、S6；S7 的判定逻辑已有单测，服务层与否决链路共用同一函数。
+- 未覆盖：S3 真实“上传成功但处理失败”部分状态（只验证到决策层）、S8 的 web 层入口、W1–W7 网页接线、四格式真实端到端、P3 报告页。
+- 下一步：新增公司资料页多文件上传（Streamlit），接 `build_batch_plan` + `execute_batch` + 质量门，并补 W1–W7 测试。
