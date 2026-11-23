@@ -61,6 +61,11 @@
 | S7 | 段落顺序损坏 | 判为不可问答并说明原因 |
 | S8 | 调用带 overwrite 的老路径 | 首版拒绝破坏性覆盖 |
 
+进度说明：S1、S2、S4 已由 `tests/fins/test_earnings_call_upload_adapter.py`
+通过真实文件系统仓储 + 既有上传服务验证；S3 目前只验证到决策层（resume → update），
+真实“上传成功但处理失败”的部分状态需要在网页接线时用可注入的失败点复测；
+S5–S7 仍待补。
+
 ## 3. 网页层
 
 落点：`dayu/web/streamlit/pages/`；

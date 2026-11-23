@@ -10,7 +10,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Optional, Protocol
@@ -48,7 +47,8 @@ class BatchFileRequest:
         material_name: 材料名（通常取文档标题），参与稳定 ID 生成。
         fiscal_year: 已确认的财年。
         fiscal_period: 已确认的财季（`Q1`–`Q4`/`FY`）。
-        content_fingerprint: 文件内容指纹，用于复用与冲突判定。
+        content_fingerprint: 源指纹，必须由 `build_upload_source_fingerprint` 产出，
+            与上传服务写入的 `source_fingerprint` 同源。
     """
 
     path: Path
@@ -134,27 +134,6 @@ class BatchUploaderProtocol(Protocol):
         Raises:
             Exception: 上传或处理失败时由实现抛出，批量层按项隔离。
         """
-
-
-def fingerprint_path(path: Path) -> str:
-    """计算文件内容指纹。
-
-    Args:
-        path: 本地文件路径。
-
-    Returns:
-        十六进制 SHA-256 指纹。
-
-    Raises:
-        FileNotFoundError: 文件不存在时抛出。
-        OSError: 读取失败时抛出。
-    """
-
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _stable_material_id(*, material_name: str, fiscal_year: int, fiscal_period: str) -> str:

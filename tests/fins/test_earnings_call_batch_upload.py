@@ -23,7 +23,6 @@ from dayu.fins.pipelines.earnings_call_batch import (
     ExistingMaterial,
     build_batch_plan,
     execute_batch,
-    fingerprint_path,
 )
 
 
@@ -220,16 +219,3 @@ def test_blank_material_name_is_rejected() -> None:
     """材料名为空白时拒绝规划。"""
     with pytest.raises(ValueError, match="材料名不能为空"):
         build_batch_plan(requests=[_request("   ", "fp-a")], existing_by_id={})
-
-
-def test_fingerprint_path_is_content_based(tmp_path: Path) -> None:
-    """文件指纹只由内容决定。"""
-    first = tmp_path / "a.txt"
-    second = tmp_path / "b.txt"
-    third = tmp_path / "c.txt"
-    first.write_text("hello", encoding="utf-8")
-    second.write_text("hello", encoding="utf-8")
-    third.write_text("hello!", encoding="utf-8")
-
-    assert fingerprint_path(first) == fingerprint_path(second)
-    assert fingerprint_path(first) != fingerprint_path(third)

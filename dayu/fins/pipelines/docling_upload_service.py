@@ -405,22 +405,7 @@ class DoclingUploadService:
             OSError: 源文件读取失败时抛出。
         """
 
-        assets: list[_PendingFileAsset] = []
-        for file_path in files:
-            raw_data = file_path.read_bytes()
-            raw_sha256 = hashlib.sha256(raw_data).hexdigest()
-            raw_content_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
-            assets.append(
-                _PendingFileAsset(
-                    name=file_path.name,
-                    data=raw_data,
-                    content_type=raw_content_type,
-                    sha256=raw_sha256,
-                    size=len(raw_data),
-                    source="original",
-                )
-            )
-        return assets
+        return _read_original_assets(files)
 
     def _build_pending_assets(
         self,
@@ -658,6 +643,56 @@ def _can_skip_upload(
         return False
     previous_fingerprint = str(previous_meta.get("source_fingerprint", "")).strip()
     return bool(previous_fingerprint) and previous_fingerprint == source_fingerprint
+
+
+def _read_original_assets(files: list[Path]) -> list[_PendingFileAsset]:
+    """按原始上传文件构建资产列表。
+
+    Args:
+        files: 源文件列表。
+
+    Returns:
+        仅包含原始上传文件的资产列表。
+
+    Raises:
+        FileNotFoundError: 源文件不存在时抛出。
+        OSError: 源文件读取失败时抛出。
+    """
+
+    assets: list[_PendingFileAsset] = []
+    for file_path in files:
+        raw_data = file_path.read_bytes()
+        assets.append(
+            _PendingFileAsset(
+                name=file_path.name,
+                data=raw_data,
+                content_type=mimetypes.guess_type(str(file_path))[0] or "application/octet-stream",
+                sha256=hashlib.sha256(raw_data).hexdigest(),
+                size=len(raw_data),
+                source="original",
+            )
+        )
+    return assets
+
+
+def build_upload_source_fingerprint(files: list[Path]) -> str:
+    """按上传服务同一规则计算原始文件的源指纹。
+
+    批量调度层必须用本函数产出的指纹与仓储中的 `source_fingerprint` 比较，
+    否则两侧指纹格式不一致，会把每次重传都误判成内容冲突。
+
+    Args:
+        files: 原始上传文件路径列表。
+
+    Returns:
+        与 `DoclingUploadService` 写入元数据时完全一致的十六进制指纹。
+
+    Raises:
+        FileNotFoundError: 文件不存在时抛出。
+        OSError: 读取失败时抛出。
+    """
+
+    return _build_upload_source_fingerprint(_read_original_assets(files))
 
 
 def _build_upload_source_fingerprint(assets: list[_PendingFileAsset]) -> str:

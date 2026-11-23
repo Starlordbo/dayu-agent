@@ -469,6 +469,14 @@ python utils/retriage_active_6k_filings.py --base workspace --tickers ALC,ASM,NV
 - 无声明、来源冲突或年份缺失时返回 `needs_confirmation=True`，由上传界面要求用户确认，下层不猜测。
 - fingerprint、去重、冲突保留与覆盖策略属于上传编排层，不在本函数内。
 
+上编排层由两个模块组成：`dayu/fins/pipelines/earnings_call_batch.py` 只做纯决策
+（create / reuse / resume_processing / conflict_new_material，单项失败隔离，拒绝破坏性覆盖）；
+`dayu/fins/pipelines/earnings_call_upload_adapter.py` 把决策映射到既有 `DoclingUploadService.execute_upload`，
+并通过仓储协议读取既有材料快照。
+
+指纹必须使用 `docling_upload_service.build_upload_source_fingerprint`：它复用上传服务内部的
+`source_fingerprint` 规则，自行计算文件哈希会导致与仓储中的指纹格式不一致，把每次重传都误判为冲突。
+
 ## 6. Ticker 归一化真源
 
 所有 ticker 的归一化都统一收敛到 `dayu/fins/ticker_normalization.py`：
