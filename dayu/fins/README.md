@@ -457,6 +457,16 @@ python utils/retriage_active_6k_filings.py --base workspace --tickers ALC,ASM,NV
 
 其中第 2 到第 5 步都必须把 `_classify_6k_text()` 当作唯一真源；主文件诊断也只是把同 filing 下各候选 exhibit 重新交给同一真源分类，再报告“当前主文件是否被别的季度 exhibit 支配”，不会额外复制另一套规则。
 
+### 5.5 电话会议纪要（EARNINGS_CALL）财季识别
+
+电话会议纪要的财季判定真源是 `dayu/fins/upload_recognition.py` 的 `infer_earnings_call_fiscal`，只做纯文本推断，无 IO、无仓储依赖：
+
+- 声明来源优先级为开场声明 > 标题 > 文件名，与披露口径的接近程度一致。
+- 同一文本同时出现季度与全年时保留季度：一份“Q4 及全年”纪要只登记一份材料。
+- 判定前先剔除对比与展望语境（compared with / outlook / guidance / 展望 / 预期），历史年份与未来年份不参与当期归属。
+- 无声明、来源冲突或年份缺失时返回 `needs_confirmation=True`，由上传界面要求用户确认，下层不猜测。
+- fingerprint、去重、冲突保留与覆盖策略属于上传编排层，不在本函数内。
+
 ## 6. Ticker 归一化真源
 
 所有 ticker 的归一化都统一收敛到 `dayu/fins/ticker_normalization.py`：

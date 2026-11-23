@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -553,3 +554,239 @@ def _derive_material_name(filename: str, *, parent_dir_name: Optional[str] = Non
     if date_prefix and rest:
         return f"{date_prefix} {rest}"
     return rest if rest else stem
+
+
+# ---------------------------------------------------------------------------
+# 电话会议纪要（EARNINGS_CALL）财季识别
+#
+# 与财报文件识别分开：电话会议纪要里 "Q4" 是当期披露口径，不按港股年报惯例
+# 升级为 FY；"Q4 及全年" 属于同一份材料，只产出一个财季判断。
+# 声明来源优先级为“开场 > 标题 > 文件名”，与披露口径的接近程度一致。
+# ---------------------------------------------------------------------------
+
+# 声明来源优先级：开场白最接近当期口径，标题次之，文件名最不可靠。
+EARNINGS_CALL_SOURCE_ORDER: tuple[str, ...] = ("opening", "title", "filename")
+
+# 判定原因码：供服务层与界面显示不同提示，避免调用方解析自由文本。
+REASON_NO_DECLARATION: str = "no_declaration"
+REASON_DECLARATION: str = "declaration"
+REASON_Q4_AND_FY: str = "q4_and_fy_single_material"
+REASON_CONFLICT: str = "source_conflict"
+
+# 季度财季集合：用于识别“季 + 全年”同时出现的单份纪要。
+_QUARTER_PERIODS: frozenset[str] = frozenset({"Q1", "Q2", "Q3", "Q4"})
+
+# 财季标记：中英文与“第 N 季度”写法并列，顺序用于同位置时的稳定性。
+_EARNINGS_CALL_PERIOD_MARKERS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("Q1", re.compile(r"(?:Q1|(?<!\d)1Q|第一季度|一季度|first\s+quarter)", re.IGNORECASE)),
+    ("Q2", re.compile(r"(?:Q2|(?<!\d)2Q|第二季度|二季度|second\s+quarter)", re.IGNORECASE)),
+    ("Q3", re.compile(r"(?:Q3|(?<!\d)3Q|第三季度|三季度|third\s+quarter)", re.IGNORECASE)),
+    ("Q4", re.compile(r"(?:Q4|(?<!\d)4Q|第四季度|四季度|fourth\s+quarter)", re.IGNORECASE)),
+    (
+        "FY",
+        re.compile(
+            r"(?:FY\s*\d{2,4}|\bFY\b|full[\s-]*year|fiscal[\s-]*year|annual|全年|财年)",
+            re.IGNORECASE,
+        ),
+    ),
+)
+
+# 对比与展望语境：命中后到句末的内容不参与当期归属判定。
+_EARNINGS_CALL_NOISE_PATTERN: re.Pattern[str] = re.compile(
+    r"(?:compared\s+(?:with|to)|versus|vs\.?|prior[\s-]*year|previous[\s-]*year|"
+    r"last[\s-]*year|outlook|guidance|forecast|expects?|expecting|looking\s+ahead|"
+    r"ahead\s+of|next\s+year|going\s+forward)",
+    re.IGNORECASE,
+)
+
+# 句子终止符：删除对比/展望片段时用于确定截断位置。
+_EARNINGS_CALL_SENTENCE_STOPS: str = ".。;；!?！？"
+
+# 年份匹配：电话会议纪要只使用四位公元年份。
+_EARNINGS_CALL_YEAR_PATTERN: re.Pattern[str] = re.compile(r"(?:19|20)\d{2}")
+
+# 年份搜索窗口：标记前后各取一段，覆盖 "Q4 2023" 与 "2023 Q4" 两种写法。
+_EARNINGS_CALL_YEAR_WINDOW_BEFORE: int = 24
+_EARNINGS_CALL_YEAR_WINDOW_AFTER: int = 48
+
+
+@dataclass(frozen=True)
+class EarningsCallFiscalGuess:
+    """电话会议纪要的财季推断结果。
+
+    Attributes:
+        fiscal_year: 推断出的财年；无法确定时为 `None`。
+        fiscal_period: 推断出的财季（`Q1`–`Q4`/`FY`）；无法确定时为 `None`。
+        source: 生效声明来源（`opening`/`title`/`filename`）；无声明时为 `None`。
+        needs_confirmation: 是否必须由用户确认后才能登记材料。
+        conflict: 是否存在来源之间的财季冲突。
+        reason: 判定原因码，取值见本模块 `REASON_*` 常量。
+    """
+
+    fiscal_year: Optional[int]
+    fiscal_period: Optional[str]
+    source: Optional[str]
+    needs_confirmation: bool
+    conflict: bool
+    reason: str
+
+
+def _strip_earnings_call_noise(text: str) -> str:
+    """删除对比与展望语境，避免历史或未来年份干扰当期归属。
+
+    Args:
+        text: 原始声明文本（开场白、标题或文件名）。
+
+    Returns:
+        删除对比/展望片段后的文本；空输入返回空字符串。
+
+    Raises:
+        无。
+    """
+    if not text.strip():
+        return ""
+    pieces: list[str] = []
+    cursor = 0
+    for match in _EARNINGS_CALL_NOISE_PATTERN.finditer(text):
+        if match.start() < cursor:
+            continue
+        end = len(text)
+        for index in range(match.end(), len(text)):
+            if text[index] in _EARNINGS_CALL_SENTENCE_STOPS:
+                end = index + 1
+                break
+        pieces.append(text[cursor:match.start()])
+        cursor = end
+    pieces.append(text[cursor:])
+    return "".join(pieces)
+
+
+def _detect_declared_periods(text: str) -> list[tuple[str, int]]:
+    """找出文本中声明的财季及其首次出现位置。
+
+    Args:
+        text: 已去除对比/展望语境的文本。
+
+    Returns:
+        按出现位置升序排列的 `(period, position)` 列表；无声明时为空列表。
+
+    Raises:
+        无。
+    """
+    found: list[tuple[str, int]] = []
+    for period, pattern in _EARNINGS_CALL_PERIOD_MARKERS:
+        match = pattern.search(text)
+        if match is not None:
+            found.append((period, match.start()))
+    found.sort(key=lambda item: item[1])
+    return found
+
+
+def _year_near(text: str, position: int) -> Optional[int]:
+    """在标记附近的窗口内查找财年。
+
+    Args:
+        text: 已去除对比/展望语境的文本。
+        position: 财季标记的起始下标。
+
+    Returns:
+        窗口内的四位年份；窗口内没有年份时返回 `None`。
+
+    Raises:
+        无。
+    """
+    start = max(0, position - _EARNINGS_CALL_YEAR_WINDOW_BEFORE)
+    end = min(len(text), position + _EARNINGS_CALL_YEAR_WINDOW_AFTER)
+    match = _EARNINGS_CALL_YEAR_PATTERN.search(text[start:end])
+    return int(match.group(0)) if match is not None else None
+
+
+def infer_earnings_call_fiscal(
+    *,
+    filename: Optional[str] = None,
+    title: Optional[str] = None,
+    opening: Optional[str] = None,
+) -> EarningsCallFiscalGuess:
+    """从文件名、标题与开场声明推断电话会议纪要的财季。
+
+    规则：开场优先于标题，标题优先于文件名；同一文本内同时出现季度与全年时
+    保留季度（一份“Q4 及全年”纪要只登记一份材料）；来源之间财季或年份不一致
+    时标记冲突并要求确认；完全无声明时不猜测。
+
+    Args:
+        filename: 文件名（含扩展名），可为 `None`。
+        title: 文档标题，可为 `None`。
+        opening: 开场声明（纪要开头一两段），可为 `None`。
+
+    Returns:
+        财季推断结果；无声明时 `fiscal_year`/`fiscal_period` 为 `None` 且
+        `needs_confirmation` 为 `True`。
+
+    Raises:
+        无。
+    """
+    sources: dict[str, Optional[str]] = {
+        "opening": opening,
+        "title": title,
+        "filename": filename,
+    }
+    candidates: list[tuple[str, str, Optional[int], bool]] = []
+    for source in EARNINGS_CALL_SOURCE_ORDER:
+        raw = sources[source]
+        if raw is None or not raw.strip():
+            continue
+        cleaned = _strip_earnings_call_noise(raw)
+        declarations = _detect_declared_periods(cleaned)
+        if not declarations:
+            continue
+        quarters = [item for item in declarations if item[0] in _QUARTER_PERIODS]
+        has_fy = any(period == "FY" for period, _ in declarations)
+        if quarters and has_fy:
+            period, position = quarters[0]
+            candidates.append((source, period, _year_near(cleaned, position), True))
+            continue
+        period, position = declarations[0]
+        candidates.append((source, period, _year_near(cleaned, position), False))
+
+    if not candidates:
+        return EarningsCallFiscalGuess(
+            fiscal_year=None,
+            fiscal_period=None,
+            source=None,
+            needs_confirmation=True,
+            conflict=False,
+            reason=REASON_NO_DECLARATION,
+        )
+
+    primary_source, primary_period, primary_year, primary_combined = candidates[0]
+    year = primary_year
+    if year is None:
+        for _, other_period, other_year, _ in candidates[1:]:
+            if other_period == primary_period and other_year is not None:
+                year = other_year
+                break
+
+    conflict = False
+    for _, other_period, other_year, _ in candidates[1:]:
+        if other_period != primary_period:
+            conflict = True
+            break
+        if other_year is not None and year is not None and other_year != year:
+            conflict = True
+            break
+
+    if conflict:
+        reason = REASON_CONFLICT
+    elif primary_combined:
+        reason = REASON_Q4_AND_FY
+    else:
+        reason = REASON_DECLARATION
+
+    return EarningsCallFiscalGuess(
+        fiscal_year=year,
+        fiscal_period=primary_period,
+        source=primary_source,
+        needs_confirmation=conflict or year is None,
+        conflict=conflict,
+        reason=reason,
+    )
