@@ -67,6 +67,10 @@
 S3 目前只验证到决策层（resume → update），真实“上传成功但处理失败”的部分状态
 需要在网页接线时用可注入的失败点复测。
 
+网页层：W1（逐文件条目）、W2（结果映射与失败展示）、W3（批次指纹去重）、W4（upload_material 请求构造）
+已由 `tests/application/test_material_tab.py` 覆盖；W5–W7（引用点击定位、文档/章节标注、分析师与管理层区分）
+依赖原文查看入口，尚未接线；真实浏览器交互未验收。
+
 ## 3. 网页层
 
 落点：`dayu/web/streamlit/pages/`；

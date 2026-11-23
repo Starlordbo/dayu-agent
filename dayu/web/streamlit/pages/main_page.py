@@ -17,6 +17,7 @@ from dayu.services.protocols import (
 from dayu.web.streamlit.components.watchlist import WatchlistItem
 from dayu.web.streamlit.pages.chat_tab import render_chat_tab
 from dayu.web.streamlit.pages.filing_tab import render_filing_tab
+from dayu.web.streamlit.pages.material_tab import render_material_tab
 from dayu.web.streamlit.pages.report_tab import render_report_tab
 
 
@@ -76,7 +77,7 @@ def render_stock_detail_page(
         无。
     """
 
-    tabs = st.tabs(["🧾 财报管理", "🧠 交互式分析", "📊 分析报告"])
+    tabs = st.tabs(["🧾 财报管理", "🧠 交互式分析", "📊 分析报告", "📞 会议纪要"])
 
     with tabs[0]:
         render_filing_tab(
@@ -97,4 +98,11 @@ def render_stock_detail_page(
             selected_stock=selected_stock,
             workspace_root=workspace_root,
             write_service=write_service,
+        )
+
+    with tabs[3]:
+        render_material_tab(
+            selected_stock=selected_stock,
+            workspace_root=workspace_root,
+            fins_service=fins_service,
         )

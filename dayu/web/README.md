@@ -26,7 +26,7 @@
 `dayu/web/streamlit/` 当前按“组件 + 页面”拆分：
 
 - `components/`：边栏与通用组件（如自选股列表）。
-- `pages/main_page.py`：主功能区入口，组合三大 Tab（财报管理、交互式分析、分析报告）。
+- `pages/main_page.py`：主功能区入口，组合四大 Tab（财报管理、交互式分析、分析报告、会议纪要）。
 - `pages/filing_tab.py`：财报下载与处理页面。
 - `pages/chat_tab.py`：交互式分析页面编排（渲染、输入、历史加载、清空会话、流式轮询）。
 - `pages/report_tab.py`：分析报告页面。
@@ -38,6 +38,13 @@
 - 聊天历史读取与清空走 `ChatServiceProtocol` 的公开方法，不在 UI 侧直接读写 archive。
 - 聊天会话 ID 语义固定为公司级稳定键（`streamlit-web-{COMPANY_ID}`），避免同公司不同 ticker 写法割裂历史。
 - 自选股持久化边界由 `tests/application/test_streamlit_watchlist.py` 守护。
+
+### 会议纪要上传
+
+- 入口：`pages/material_tab.py`，主功能区第四个 Tab。
+- 一个文件登记为一份材料：逐文件用 `infer_earnings_call_fiscal` 推断财季，逐文件提交既有 `upload_material` 命令（`stream=False`，同步取结果）。
+- 单文件失败不影响同批其他文件；页面按批次指纹（文件名 + 字节数）去重，重绘不会重复提交。
+- 财季无法确认的文件在页面上标记“需确认”，用户勾选确认后才提交，缺财年/财季的文件直接标 `pending_confirmation` 而不猜测。
 
 ### 对话模型选择
 
