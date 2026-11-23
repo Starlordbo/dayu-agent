@@ -17,7 +17,8 @@ from .financial_enhancer import FinsProcessorMixin, relabel_tables
 class FinsDoclingProcessor(FinsProcessorMixin, DoclingProcessor):
     """fins 业务域 Docling 处理器。"""
 
-    PARSER_VERSION = "fins_docling_processor_v1.0.0"
+    # 正文段落边界影响搜索/快照产物，业务处理器也必须使旧快照版本失效。
+    PARSER_VERSION = "fins_docling_processor_v1.1.0"
 
     def __init__(
         self,

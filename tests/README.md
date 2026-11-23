@@ -553,3 +553,28 @@ DAYU_RUN_LIVE_API=1 EDGAR_LOCAL_DATA_DIR="$PWD/workspace/tmp/edgar" \
 事件日志不收集 reasoning 增量或原生加密 reasoning；工作区可能含 Host 执行快照，应仅在
 本机保留，不提交 Git。本测试验证协议和会话闭环，不验证真实财报研究质量、网页交互、
 进程崩溃中点恢复或取消路径。
+
+## 纪要上传与原文引用测试
+
+- `tests/fins/test_earnings_call_*.py`：财季识别、单文件决策、默认质量门、禁止破坏性覆盖、严格身份行解析。覆盖身份与问句形式独立、未知身份、原文连续范围。
+- `tests/application/test_material_upload_integration.py`：真实 Runtime/Docling/仓储/预处理四格式链路；在快照导出点注入处理失败，检查重试只处理且原文件/元数据不变。宿主外壳为测试替身，不等同完整 Host/Agent 会话。
+- `tests/application/test_document_reference_service.py`：真实入库、重新装配后的目录、跨公司同编号隔离、删除/不完整状态、文档/章节范围、只读且零命令。必须保护 Docling 正文段落边界，禁止以宽松身份推断掩盖源文本损失。
+- `tests/application/test_streamlit_citations.py`：历史/流式/终态统一格式化，完整合法机器定位、分块输出、URL注入与代码块隔离。
+- `tests/application/test_streamlit_chat_render.py`：真实聊天 AppTest 控件及逐帧事件接线，检查用户文本不替换、历史/流式/终态来源均正确，保持会话参数；离线类型化 Service 不调用模型。
+- `tests/application/test_material_tab_render.py` 与 `test_streamlit_source_viewer.py`：无头 AppTest 验证逐文件失败/重试、编辑/去重、持久目录、来源定位/连续目录选择/刷新和角色证据。只替代浏览器上传控件，不将 AppTest 声称为真实浏览器验收。
+- `tests/application/test_streamlit_source_routing.py`：执行真实 `main()`，守住来源先于侧栏路由、缺失依赖提示、启动准备与服务缓存边界。
+- `tests/fins/test_docling_source_boundaries.py`：同时验证引擎与业务 Docling processor 保留块内/块间换行，并约束两层 parser version，不能只提升被业务覆盖的父类版本。
+- 合成四格式样本与来源说明位于 `tests/fixtures/earnings_call/`。MD/TXT/DOCX/文字型PDF均需验证“实际42 million、分析师100 million假设、管理层否认”的原文及身份，不只检查转换成功。
+
+本机测试示例（Python 3.11，避免第三方缓存写出工作区）：
+
+```bash
+source .venv/bin/activate
+EDGAR_LOCAL_DATA_DIR="$PWD/workspace/tmp/edgar" HF_HOME="$PWD/.cache/hf" \
+  python -m pytest tests/application/test_material_upload_integration.py \
+    tests/application/test_document_reference_service.py \
+    tests/application/test_streamlit_source_viewer.py -q -p no:cacheprovider
+pyright --pythonpath .venv/bin/python
+```
+
+覆盖率使用目录目标（如 `--cov=dayu/fins`），避免模块名目标触发 NumPy 提前导入/重载；并行运行时为每个任务设置独立 `COVERAGE_FILE`。

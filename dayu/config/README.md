@@ -143,7 +143,7 @@ Prompt 装配还遵循一条 Prefix Cache 导向的顺序约束：
 - `tool_call_budget_threshold` 不再进入 prompt context，预算感知统一依赖工具结果里的 `tool_calls_remaining`。
 
 分层原则：
-- `base/fact_rules.md`：只放通用事实/前瞻/证据格式边界，以及相对时间归一化规则（区分运行时当前时间、信息获取时间、事件发生/报道发布时间、正文局部相对时间词）。
+- `base/fact_rules.md`：只放通用事实/前瞻/证据格式边界，以及相对时间归一化规则（区分运行时当前时间、信息获取时间、事件发生/报道发布时间、正文局部相对时间词）。工具提供 `citation.source_marker` 时要求原样保留，不自行拼造定位；纪要引用按 `passages` 原文身份依据区分分析师问题与管理层发言，未知身份不得补猜。
 - `scenes/write.md`：只放写作场景的执行契约与证据锚点动作规则。
 - `scenes/regenerate.md`：只放整章重建场景的执行契约与重建边界。
 - `tasks/write_chapter.md`、`tasks/regenerate_chapter.md`：只放各自任务特有的动作与输入输出要求，不重复 system prompt 中的通用边界；优先保留“当前这轮必须知道的输入与局部约束”，不要把 scene 已声明的通用规则再讲一遍。

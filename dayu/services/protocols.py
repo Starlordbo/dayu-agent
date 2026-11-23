@@ -6,6 +6,7 @@ from typing import AsyncIterator, Protocol, runtime_checkable
 
 from dayu.contracts.events import AppEvent, PublishedRunEventProtocol
 from dayu.fins.domain.document_models import FilingSummary
+from dayu.fins.domain.document_reference import DocumentReference, DocumentReferenceView, DocumentSourceInfo
 from dayu.host.protocols import ConversationSessionTurnExcerpt
 from dayu.services.contracts import (
     ChatPendingTurnView,
@@ -161,6 +162,30 @@ class FinsServiceProtocol(BaseServiceProtocol, Protocol):
         """
         ...
 
+    def resolve_document_reference(self, request: DocumentReference) -> DocumentReferenceView:
+        """聚合原文头、目录与选中章节；只读且不启动 Agent。
+
+        Args:
+            request: 公司、文档与可选章节定位。
+        Returns:
+            可展示的原文视图。
+        Raises:
+            ValueError: 定位非法或材料未完整入库。
+            FileNotFoundError: 原文不存在或已删除。
+        """
+        ...
+
+    def list_materials(self, ticker: str) -> list[DocumentSourceInfo]:
+        """列出公司已入库的电话会议材料，不将入库状态冒充处理就绪。
+
+        Args:
+            ticker: 公司代码。
+        Returns:
+            已入库材料文档头列表。
+        Raises:
+            ValueError: 公司参数非法。
+        """
+        ...
 
     def list_filings(self, ticker: str) -> list[FilingSummary]:
         """查询指定股票的已下载财报列表。

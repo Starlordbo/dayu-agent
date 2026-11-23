@@ -52,6 +52,7 @@ from .docling_upload_service import (
     reset_upload_target_for_overwrite,
     resolve_upload_action,
     validate_material_upload_ids,
+    validate_material_upload_overwrite,
 )
 from .processing_helpers import (
     filter_requested_document_ids as _filter_requested_document_ids_common,
@@ -773,6 +774,8 @@ class CnPipeline(PipelineProtocol):
             resolved_document_id,
             SourceKind.MATERIAL,
         )
+        # 不能先 reset 再交给底层拒绝，否则原件与元数据已遭删除。
+        validate_material_upload_overwrite(form_type=form_type, overwrite=overwrite)
         requested_action = str(action or "").strip().lower() or None
         resolved_action = resolve_upload_action(action, previous_meta)
         yield UploadMaterialEvent(

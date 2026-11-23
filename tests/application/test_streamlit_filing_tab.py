@@ -15,7 +15,8 @@ from dayu.contracts.fins import (
     FinsCommandName,
 )
 from dayu.fins.domain.document_models import FilingSummary
-from dayu.services.contracts import FinsSubmitRequest
+from dayu.fins.domain.document_reference import DocumentReference, DocumentReferenceView, DocumentSourceInfo
+from dayu.services.contracts import FinsSubmission, FinsSubmitRequest
 from dayu.web.streamlit.pages.filing.download_panel import (
     _DownloadFormValues,
     _build_download_log_lines,
@@ -278,18 +279,76 @@ def test_build_download_submit_request_empty_form_types() -> None:
 class _FakeFinsService:
     """模拟财报服务，返回固定 FilingSummary 列表。"""
 
-    def __init__(self, filings: list[FilingSummary] | None = None) -> None:
+    def __init__(self, filings: list[FilingSummary] | None = None, *, fail_read: bool = False) -> None:
+        """保存财报目录与可控读取失败标志。
+
+        参数:
+            filings: 显式提供的财报摘要。
+            fail_read: 是否在目录读取时注入磁盘错误。
+        返回值:
+            无。
+        异常:
+            无。
+        """
         self._filings = filings or []
+        self._fail_read = fail_read
 
     def list_filings(self, ticker: str) -> list[FilingSummary]:
+        """返回配置的财报目录或注入读取错误。
+
+        参数:
+            ticker: 查询公司代码。
+        返回值:
+            测试财报摘要列表。
+        异常:
+            OSError: 设置读取失败标志时抛出。
+        """
+        if self._fail_read:
+            raise OSError("磁盘错误")
         return self._filings
+
+    def list_materials(self, ticker: str) -> list[DocumentSourceInfo]:
+        """返回不含材料的测试目录。
+
+        参数:
+            ticker: 查询公司代码。
+        返回值:
+            空材料列表。
+        异常:
+            无。
+        """
+        return []
+
+    def resolve_document_reference(self, request: DocumentReference) -> DocumentReferenceView:
+        """拒绝纯财报列表测试中意外的原文读取。
+
+        参数:
+            request: 意外原文请求。
+        返回值:
+            不返回。
+        异常:
+            AssertionError: 调用了不属于本测试的读取边界。
+        """
+        raise AssertionError(f"财报列表不应读取原文：{request.document_id}")
+
+    def submit(self, request: FinsSubmitRequest) -> FinsSubmission:
+        """拒绝纯目录测试中意外的命令提交。
+
+        参数:
+            request: 意外提交请求。
+        返回值:
+            不返回。
+        异常:
+            AssertionError: 调用了不属于本测试的命令边界。
+        """
+        raise AssertionError(f"财报列表不应提交命令：{request.command.name}")
 
 
 @pytest.mark.unit
 def test_get_filing_list_empty() -> None:
     """无财报时应返回空列表。"""
     service = _FakeFinsService([])
-    result = _get_filing_list(Path("/workspace"), "AAPL", service)  # type: ignore[arg-type]
+    result = _get_filing_list(Path("/workspace"), "AAPL", service)
     assert result == []
 
 
@@ -307,7 +366,7 @@ def test_get_filing_list_returns_filing_info() -> None:
         primary_file_path="/workspace/filings/AAPL/doc-1/report.pdf",
     )
     service = _FakeFinsService([summary])
-    result = _get_filing_list(Path("/workspace"), "AAPL", service)  # type: ignore[arg-type]
+    result = _get_filing_list(Path("/workspace"), "AAPL", service)
     assert len(result) == 1
     info = result[0]
     assert info["document_id"] == "doc-1"
@@ -333,7 +392,7 @@ def test_get_filing_list_deleted_item() -> None:
         is_deleted=True,
     )
     service = _FakeFinsService([summary])
-    result = _get_filing_list(Path("/workspace"), "AAPL", service)  # type: ignore[arg-type]
+    result = _get_filing_list(Path("/workspace"), "AAPL", service)
     assert len(result) == 1
     assert result[0]["status"] == "已删除"
 
@@ -343,7 +402,7 @@ def test_get_filing_list_missing_fields() -> None:
     """字段缺失时应显示'未知'占位。"""
     summary = FilingSummary(document_id="doc-3")
     service = _FakeFinsService([summary])
-    result = _get_filing_list(Path("/workspace"), "AAPL", service)  # type: ignore[arg-type]
+    result = _get_filing_list(Path("/workspace"), "AAPL", service)
     info = result[0]
     assert info["file_name"] == "未知"
     assert info["form_type"] == "未知"
@@ -363,7 +422,7 @@ def test_get_filing_list_computes_relative_path() -> None:
         primary_file_path="/workspace/filings/AAPL/doc-4/annual.pdf",
     )
     service = _FakeFinsService([summary])
-    result = _get_filing_list(workspace, "AAPL", service)  # type: ignore[arg-type]
+    result = _get_filing_list(workspace, "AAPL", service)
     assert result[0]["file_path"] == "filings/AAPL/doc-4/annual.pdf"
 
 
@@ -377,7 +436,7 @@ def test_get_filing_list_path_outside_workspace() -> None:
         primary_file_path="/other/path/external.pdf",
     )
     service = _FakeFinsService([summary])
-    result = _get_filing_list(workspace, "AAPL", service)  # type: ignore[arg-type]
+    result = _get_filing_list(workspace, "AAPL", service)
     assert result[0]["file_path"] == "/other/path/external.pdf"
 
 
@@ -392,9 +451,5 @@ def test_get_filing_list_none_service_returns_empty() -> None:
 def test_get_filing_list_service_raises_oserror() -> None:
     """service 抛出 OSError 时，_get_filing_list 应保持纯查询并上抛异常。"""
 
-    class _ErrorService:
-        def list_filings(self, ticker: str) -> list[FilingSummary]:
-            raise OSError("磁盘错误")
-
     with pytest.raises(OSError, match="磁盘错误"):
-        _get_filing_list(Path("/workspace"), "AAPL", _ErrorService())  # type: ignore[arg-type]
+        _get_filing_list(Path("/workspace"), "AAPL", _FakeFinsService(fail_read=True))

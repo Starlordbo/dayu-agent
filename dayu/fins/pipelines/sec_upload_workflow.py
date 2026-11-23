@@ -15,6 +15,7 @@ from dayu.fins.pipelines.docling_upload_service import (
     reset_upload_target_for_overwrite,
     resolve_upload_action,
     validate_material_upload_ids,
+    validate_material_upload_overwrite,
 )
 from dayu.fins.pipelines.upload_filing_events import UploadFilingEvent, UploadFilingEventType
 from dayu.fins.pipelines.upload_material_events import UploadMaterialEvent, UploadMaterialEventType
@@ -347,6 +348,8 @@ async def run_upload_material_stream(
         resolved_document_id,
         SourceKind.MATERIAL,
     )
+    # 必须在公司写入和 reset 之前拒绝，底层上传检查无法挽救已被清空的原件。
+    validate_material_upload_overwrite(form_type=form_type, overwrite=overwrite)
     requested_action = str(action or "").strip().lower() or None
     normalized_action = resolve_upload_action(action, previous_meta)
     yield UploadMaterialEvent(

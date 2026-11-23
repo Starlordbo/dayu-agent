@@ -176,6 +176,7 @@ class ToolExecutor(Protocol):
 
 处理器相关稳定契约补充：
 - `DocumentProcessor` 通过 `get_parser_version()` 暴露 parser version；协议层不再要求上层直接读取类变量。
+- `DoclingProcessor` 的章节正文保留文本块内部换行，并用段落分隔连接块；只有预览/搜索摘要归一空白，不能把原文压为单行而丢失身份行。parser version 为 `docling_processor_v1.2.0`，已有处理快照需重新处理才能更新，不改变仓储 schema。
 - `Source` 是只读结构化协议，约束的是 `uri/media_type/content_length/etag/open/materialize` 这组能力，而不是要求实现类显式继承协议。
 - 处理器、仓储返回的具体 `Source` 实现和测试桩都应依赖结构兼容，不要把 `Protocol` 当作运行时父类使用。
 - `DoclingProcessor` 的文档装配主链路与私有 helper 当前以 `DoclingDocument / NodeItem / TableItem` 这组 docling 真类型作为静态契约；如果测试需要覆盖异常分支，应让测试桩通过 typed fake / 显式 cast 对齐该边界，而不是反向放宽生产代码签名去兼容旧测试对象。

@@ -102,7 +102,7 @@ class _TableBlock:
 class DoclingProcessor:
     """Docling JSON 文档处理器。"""
 
-    PARSER_VERSION = "docling_processor_v1.1.0"
+    PARSER_VERSION = "docling_processor_v1.2.0"
 
     @classmethod
     def get_parser_version(cls) -> str:
@@ -810,11 +810,13 @@ def _render_section_content(
             continue
         if item.item_type != "text":
             continue
-        text = _normalize_whitespace(item.text)
+        text = item.text.strip()
         if text:
             parts.append(text)
 
-    content = _normalize_whitespace(" ".join(parts))
+    # 正文保留 Docling 的块边界；压成一行会把发言人身份与他人的问答混在一起。
+    # 仅 preview/search 摘要可归一空白，完整原文不可复用该有损规则。
+    content = "\n\n".join(parts)
     unresolved_refs = [ref for ref in declared_table_refs if ref not in used_table_refs]
     content = _append_missing_placeholders(content, unresolved_refs)
     return {
@@ -949,7 +951,8 @@ def _extract_item_text(item: NodeItem) -> str:
     """
 
     text = getattr(item, "text", "")
-    return _normalize_whitespace(str(text or ""))
+    # 不抹掉文本块内部已存在的换行，章节正文需要保留原始段落证据。
+    return str(text or "").strip()
 
 
 def _extract_internal_ref(item: NodeItem) -> Optional[str]:

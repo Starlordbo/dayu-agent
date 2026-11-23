@@ -9,7 +9,8 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
+from urllib.parse import quote
 from enum import Enum
 from typing import Any, Optional
 
@@ -95,6 +96,9 @@ class Citation:
         fiscal_period: 财期。
         item: 章节 Item 编号（如 "Item 1A"），仅部分工具填充。
         heading: 章节标题（如 "Risk Factors"），仅部分工具填充。
+        section_ref: 已读取的真实章节 ref；文档级或全文兜底时为空。
+        company_name: 仓储中的公司名称。
+        material_name: 仓储中的真实材料标题。
     """
 
     source_type: str
@@ -107,36 +111,45 @@ class Citation:
     fiscal_period: Optional[str] = None
     item: Optional[str] = None
     heading: Optional[str] = None
+    section_ref: str | None = None
+    company_name: str | None = None
+    material_name: str | None = None
 
-    def to_dict(self) -> dict[str, Any]:
-        """转换为可序列化字典，移除值为 None 的键。
+    def to_dict(self) -> dict[str, str | int]:
+        """序列化领域定位，不包含 UI URL；全文引用不冒充章节。
 
+        Args:
+            无。
         Returns:
-            紧凑字典。
+            非空字段、引用层级及可原样复制的机器定位标记。
+        Raises:
+            无。
         """
-        return {k: v for k, v in asdict(self).items() if v is not None}
+        result: dict[str, str | int] = {k: v for k, v in asdict(self).items() if v is not None}
+        parts = [self.ticker, self.document_id]
+        if self.section_ref:
+            parts.append(self.section_ref)
+        result["scope"] = "section" if self.section_ref else "document"
+        result["source_marker"] = "[[source:" + "|".join(quote(part, safe="") for part in parts) + "]]"
+        return result
 
-    def with_section(self, *, item: Optional[str] = None, heading: Optional[str] = None) -> "Citation":
+    def with_section(
+        self, *, item: Optional[str] = None, heading: Optional[str] = None, section_ref: str | None = None
+    ) -> "Citation":
         """派生一个附带章节信息的 Citation 副本。
 
         Args:
             item: 章节 Item 编号。
             heading: 章节标题。
+            section_ref: 已读取的真实章节 ref，不从标题猜测。
 
         Returns:
-            新 Citation 实例。
+            保留文档身份与真实标题的新 Citation 实例。
+        Raises:
+            无。
         """
-        return Citation(
-            source_type=self.source_type,
-            document_id=self.document_id,
-            ticker=self.ticker,
-            form_type=self.form_type,
-            filing_date=self.filing_date,
-            accession_no=self.accession_no,
-            fiscal_year=self.fiscal_year,
-            fiscal_period=self.fiscal_period,
-            item=item or self.item,
-            heading=heading or self.heading,
+        return replace(
+            self, item=item or self.item, heading=heading or self.heading, section_ref=section_ref or self.section_ref
         )
 
 

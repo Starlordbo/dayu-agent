@@ -191,6 +191,23 @@ def main() -> None:
 
     workspace_root = _resolve_workspace_root()
 
+    # 与其他页面一起在入口运行时加载，避免启动装配阶段提前加载页面依赖。
+    # 来源链接使用自己的公司身份，不能被侧栏当前股票覆盖；读取不启动 Agent。
+    from dayu.web.streamlit.pages.source_viewer import reference_from_query, render_source_viewer
+
+    try:
+        source_request = reference_from_query(st.query_params.to_dict())
+    except ValueError as exc:
+        st.error(str(exc))
+        return
+    if source_request is not None:
+        if prepared_deps is None:
+            st.error("原文服务不可用，请检查配置后刷新页面。")
+            return
+        fins_service, _chat_service, _write_service = _resolve_services(prepared_deps)
+        render_source_viewer(service=fins_service, request=source_request, query_params=st.query_params.to_dict())
+        return
+
     # 左侧边栏：渲染自选股列表
     selected_stock = render_sidebar(workspace_root=workspace_root)
 

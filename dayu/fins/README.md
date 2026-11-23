@@ -478,8 +478,23 @@ python utils/retriage_active_6k_filings.py --base workspace --tickers ALC,ASM,NV
 `source_fingerprint` 规则，自行计算文件哈希会导致与仓储中的指纹格式不一致，把每次重传都误判为冲突。
 
 转换后质量门在 `dayu/fins/pipelines/earnings_call_quality.py`：空正文、替换字符占比过高的乱码、
-页号回退判为不可问答，由 `DoclingUploadService(assess_docling=...)` 在入库前否决（默认不启用，
-只由纪要上传接线注入）。回退原因码为 `empty_text` / `garbled_text` / `page_order_broken`。
+页号回退判为不可问答；`DoclingUploadService` 对 `EARNINGS_CALL` 默认在写入原件和元数据前执行质量门，
+其他材料不改变默认行为，显式 `assess_docling` 可替换判定器。原因码为 `empty_text` / `garbled_text` / `page_order_broken`。
+
+上传安全边界由 `validate_material_upload_overwrite` 收口：SEC、CN/HK 编排在公司写入或 reset 之前拒绝纪要的
+`overwrite=True`，底层上传服务也拒绝。相同身份且同指纹跳过，异指纹明确冲突并保留原件；用户须修改材料标题另存。
+
+### 5.6 原文定位与纪要片段
+
+- `Citation` 输出领域身份 `ticker + document_id + section_ref`、真实公司/材料标题及 `scope`。
+  `source_marker` 是可原样复制的定位标记，不是 URL；URL 由 UI 生成，不能按自然语言标题反查。
+- `read_section` 返回 `contains_full_text`。没有真实章节的全文伪章节保持文档级 citation，不冒充章节证据。
+- `get_document_info` 每次经公司/源仓储读取当前状态，拒绝删除或未完整入库材料，不依赖旧 meta 缓存。
+  `FinsService.resolve_document_reference` 聚合文档头、目录和指定章节；该只读路径不启动 Agent，也不重复转换或预处理。
+- `earnings_call_passages.parse_earnings_call_passages` 仅从已读正文的明确独立身份行派生连续片段，保留字符范围、
+  原文及身份依据；未知为 `unknown`，身份与问句形式分开。它不从 Q&A 标题、姓名或机构猜角色，不推断语义问答；显式冒号行内标签只切断身份继承并标为 `unknown`，不确定新角色。
+  片段为临时派生数据，不新增持久化 schema 或版本管理框架。
+- Docling 章节正文保留块间及块内换行；`FinsDoclingProcessor` 的 parser version 为 `fins_docling_processor_v1.1.0`，与引擎读取行为同步升级，不能复用旧版压平正文的处理快照。
 
 ## 6. Ticker 归一化真源
 

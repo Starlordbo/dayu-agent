@@ -27,6 +27,8 @@ from dayu.engine.processors.base import (
 from dayu.engine.processors.processor_registry import ProcessorRegistry
 from dayu.engine.tools.error_contract import ErrorCode
 from dayu.fins.domain.enums import SourceKind
+from dayu.fins.domain.document_reference import DocumentSourceInfo
+from dayu.fins.earnings_call_passages import parse_earnings_call_passages
 from dayu.fins.domain.tool_models import Citation, SourceType
 from dayu.fins.storage import (
     CompanyMetaRepositoryProtocol,
@@ -99,8 +101,11 @@ from .service_helpers import (
     resolve_has_financial_data,
     resolve_document_type_for_source,
 )
+
 # 匹配 CJK 统一汉字（基本区 + 扩展A），用于检测查询词是否含中文
 _CN_CHAR_RE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf]")
+
+
 def _any_query_has_chinese(queries: list[str]) -> bool:
     """检测查询列表中是否存在含中文字符的查询词。"""
     return any(_CN_CHAR_RE.search(q) for q in queries)
@@ -127,6 +132,7 @@ class FinsToolService:
     """
 
     MODULE = "FINS.TOOL_SERVICE"
+
     def __init__(
         self,
         *,
@@ -262,6 +268,41 @@ class FinsToolService:
             result["suggestion"] = suggestion
 
         return result
+
+    def get_document_info(self, *, ticker: str, document_id: str) -> DocumentSourceInfo:
+        """读取当前源文档头，拒绝删除或未完整入库状态，不复用过期 meta 缓存。
+
+        Args:
+            ticker: 公司代码或仓储可识别别名。
+            document_id: 文档稳定 ID。
+        Returns:
+            来自真实仓储的公司、财季与材料标题。
+        Raises:
+            FileNotFoundError: 文档不存在或已删除。
+            ValueError: 文档尚未完整入库。
+            ToolArgumentError: 身份参数非法。
+        """
+        ticker, document_id = self._normalize_document_identity(
+            ticker=ticker, document_id=document_id, tool_name="get_document_info"
+        )
+        source_kind = self._resolve_source_kind(ticker=ticker, document_id=document_id)
+        meta = self._source_repository.get_source_meta(ticker, document_id, source_kind)
+        if bool(meta.get("is_deleted", False)):
+            raise FileNotFoundError("原文已删除")
+        if not bool(meta.get("ingest_complete", False)):
+            raise ValueError("原文尚未完整入库")
+        company_name, _market = self._read_company_info(ticker)
+        year = meta.get("fiscal_year")
+        return DocumentSourceInfo(
+            ticker=ticker,
+            document_id=document_id,
+            company_name=normalize_optional_text(company_name),
+            material_name=normalize_optional_text(meta.get("material_name")),
+            form_type=normalize_optional_text(meta.get("form_type")),
+            fiscal_year=year if isinstance(year, int) and not isinstance(year, bool) else None,
+            fiscal_period=normalize_optional_text(meta.get("fiscal_period")),
+            filing_date=normalize_optional_text(meta.get("filing_date")),
+        )
 
     def get_document_sections(self, *, ticker: str, document_id: str) -> DocumentSectionsResult:
         """获取文档章节结构。
@@ -417,11 +458,29 @@ class FinsToolService:
             document_id=normalized_document_id,
             item=item_label,
             heading=str(title) if title else None,
+            section_ref=None if section_raw.get("contains_full_text", False) else normalized_ref,
         )
         return {
             "ticker": normalized_ticker,
             "document_id": normalized_document_id,
             "ref": normalized_ref,
+            "contains_full_text": bool(section_raw.get("contains_full_text", False)),
+            "passages": (
+                [
+                    {
+                        "start": passage.start,
+                        "end": passage.end,
+                        "text": passage.text,
+                        "speaker": passage.speaker,
+                        "role": passage.role,
+                        "kind": passage.kind,
+                        "evidence": passage.evidence,
+                    }
+                    for passage in parse_earnings_call_passages(content)
+                ]
+                if form_type == "EARNINGS_CALL"
+                else []
+            ),
             "title": title,
             "item": item_label,
             "topic": topic,
@@ -479,7 +538,9 @@ class FinsToolService:
         )
         # 校验互斥：query 与 queries 必须提供其一
         resolved_queries = _resolve_search_queries(
-            query=query, queries=queries, max_queries=_QUERIES_MAX,
+            query=query,
+            queries=queries,
+            max_queries=_QUERIES_MAX,
         )
         # 保存查询词副本，供中文无结果 hint 检测使用
         original_queries = resolved_queries
@@ -507,9 +568,7 @@ class FinsToolService:
         )
         try:
             all_secs = processor.list_sections()
-            enriched_for_search = self._enrich_sections_with_semantic(
-                sections=all_secs, form_type=form_type
-            )
+            enriched_for_search = self._enrich_sections_with_semantic(sections=all_secs, form_type=form_type)
             bm25f_index = build_section_bm25f_index(enriched_for_search)
             semantic_profiles, query_term_df = _build_section_semantic_profiles(enriched_for_search)
             for sec in enriched_for_search:
@@ -547,15 +606,13 @@ class FinsToolService:
             document_count=max(1, len(semantic_profiles)),
             mode=resolved_mode,
         )
-        ranked_entries, strategy_hit_counts, exact_matches, expansion_queries = (
-            _execute_query_search(
-                processor=processor,
-                query=normalized_query,
-                within_ref=normalized_within_ref,
-                mode=resolved_mode,
-                diagnosis=diagnosis,
-                semantic_profiles=semantic_profiles,
-            )
+        ranked_entries, strategy_hit_counts, exact_matches, expansion_queries = _execute_query_search(
+            processor=processor,
+            query=normalized_query,
+            within_ref=normalized_within_ref,
+            mode=resolved_mode,
+            diagnosis=diagnosis,
+            semantic_profiles=semantic_profiles,
         )
 
         deduplicated_entries = _deduplicate_ranked_search_entries(ranked_entries)
@@ -682,26 +739,28 @@ class FinsToolService:
                 document_count=max(1, len(semantic_profiles)),
                 mode=resolved_mode,
             )
-            ranked, strategy_hits, exact_matches, expansion_queries = (
-                _execute_query_search(
-                    processor=processor, query=q,
-                    within_ref=normalized_within_ref, mode=resolved_mode,
-                    diagnosis=query_diagnosis,
-                    semantic_profiles=semantic_profiles,
-                )
+            ranked, strategy_hits, exact_matches, expansion_queries = _execute_query_search(
+                processor=processor,
+                query=q,
+                within_ref=normalized_within_ref,
+                mode=resolved_mode,
+                diagnosis=query_diagnosis,
+                semantic_profiles=semantic_profiles,
             )
             all_ranked.extend(ranked)
             # 合并策略命中计数
             for strat, cnt in strategy_hits.items():
                 merged_strategy_hits[strat] = merged_strategy_hits.get(strat, 0) + cnt
-            per_query_stats.append({
-                "query": q,
-                "hits": len(ranked),
-                "exact_hits": len(exact_matches),
-                "expansion_count": len(expansion_queries),
-                "is_high_ambiguity": query_diagnosis.is_high_ambiguity,
-                "intent": query_diagnosis.intent,
-            })
+            per_query_stats.append(
+                {
+                    "query": q,
+                    "hits": len(ranked),
+                    "exact_hits": len(exact_matches),
+                    "expansion_count": len(expansion_queries),
+                    "is_high_ambiguity": query_diagnosis.is_high_ambiguity,
+                    "intent": query_diagnosis.intent,
+                }
+            )
 
         deduplicated = _deduplicate_ranked_search_entries(all_ranked)
         sorted_entries = _sort_ranked_search_entries(
@@ -825,11 +884,7 @@ class FinsToolService:
                 "col_count": int(item.get("col_count", 0) or 0),
                 "is_financial": is_financial,
                 "table_type": _normalize_table_type(item.get("table_type")),
-                "headers": (
-                    [str(h)[:80] for h in raw_headers if h]
-                    if isinstance(raw_headers, list)
-                    else None
-                ),
+                "headers": ([str(h)[:80] for h in raw_headers if h] if isinstance(raw_headers, list) else None),
             }
             # within_section：与请求参数 within_section_ref 语义同源，表达 table 所属 section
             if section_ref:
@@ -954,7 +1009,9 @@ class FinsToolService:
             result["page_no"] = page_no
         return result
 
-    def get_page_content(self, *, ticker: str, document_id: str, page_no: int) -> PageContentResult | NotSupportedResult:
+    def get_page_content(
+        self, *, ticker: str, document_id: str, page_no: int
+    ) -> PageContentResult | NotSupportedResult:
         """读取页面上下文。
 
         Args:
@@ -1129,9 +1186,7 @@ class FinsToolService:
                 "concepts must be a string array or omitted",
             )
         normalized_concepts = [
-            item
-            for item in (normalize_optional_text(concept) for concept in (concepts or []))
-            if item is not None
+            item for item in (normalize_optional_text(concept) for concept in (concepts or [])) if item is not None
         ]
 
         form_type = self._resolve_document_form_type(
@@ -1429,7 +1484,8 @@ class FinsToolService:
             )
             # 从 processed meta 读取能力标志（轻量 JSON），处理缺失的情况
             has_financial_data = self._read_capability_flags(
-                ticker, document_id,
+                ticker,
+                document_id,
             )
             results.append(
                 {
@@ -1454,20 +1510,21 @@ class FinsToolService:
         document_id: str,
         item: Optional[str] = None,
         heading: Optional[str] = None,
-    ) -> dict[str, Any]:
+        section_ref: str | None = None,
+    ) -> dict[str, str | int]:
         """构建统一 citation 对象。
-
         从 meta.json 读取文档元数据，构建可序列化的 citation 字典。
         同一 (ticker, document_id) 的 meta 读取会被 _get_document_meta_cached 缓存。
-
         Args:
             ticker: 标准化股票代码。
             document_id: 标准化文档 ID。
             item: 可选 Item 编号（如 "Item 1A"）。
             heading: 可选章节标题。
-
+            section_ref: 可选真实章节 ref；全文兜底传 None。
         Returns:
             citation 字典（值为 None 的键已移除）。
+        Raises:
+            OSError: 仓储读取失败时抛出。
         """
         meta = self._get_document_meta_cached(ticker, document_id)
         source_kind = normalize_optional_text(meta.get("source_kind")) if meta else None
@@ -1496,6 +1553,9 @@ class FinsToolService:
             fiscal_period=normalize_optional_text(meta.get("fiscal_period")) if meta else None,
             item=item,
             heading=heading,
+            section_ref=section_ref,
+            company_name=normalize_optional_text(self._read_company_info(ticker)[0]),
+            material_name=normalize_optional_text(meta.get("material_name")) if meta else None,
         )
         return citation.to_dict()
 

@@ -1,162 +1,212 @@
-"""电话会议纪要上传 Tab 纯函数测试。
-
-覆盖 `docs/p2-verification.md` 的 W1、W2（结果映射）、W3、W4。
-"""
+"""纪要上传页面的状态、隔离、恢复与真实命令边界测试。"""
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import pytest
 
 from dayu.contracts.fins import (
-    FinsCommandName,
-    UploadMaterialCommandPayload,
-    UploadMaterialResultData,
+    FinsCommandName, FinsResult, ProcessSingleResultData,
+    UploadMaterialCommandPayload, UploadMaterialResultData,
 )
+from dayu.fins.domain.document_models import FilingSummary
+from dayu.fins.domain.document_reference import DocumentReference, DocumentReferenceView, DocumentSourceInfo
+from dayu.services.contracts import FinsSubmission, FinsSubmitRequest
 from dayu.web.streamlit.pages.material_tab import (
-    STATUS_FAILED,
-    STATUS_SUBMITTED,
-    MaterialUploadEntry,
-    apply_result,
-    batch_key,
-    build_material_entries,
-    build_upload_request,
+    STATUS_FAILED, STATUS_PENDING_CONFIRMATION, STATUS_PROCESSING, STATUS_READY,
+    MaterialUploadEntry, MaterialUploadInput, MaterialUploadRow,
+    apply_result, build_material_entries, build_upload_request,
+    execute_material_input, material_input_key,
 )
 
 
-def _entry(
-    *,
-    file_name: str = "2023Q4_call.md",
-    material_name: str = "2023Q4_call",
-    fiscal_year: int | None = 2023,
-    fiscal_period: str | None = "Q4",
-    needs_confirmation: bool = False,
-    reason: str = "declaration",
-) -> MaterialUploadEntry:
-    """构造条目，默认值可被覆盖。
+@dataclass
+class RecordingService:
+    """记录真实命令类型并允许注入处理失败的最小服务替身。"""
+
+    fail_processing: bool = False
+    upload_status: str = "ok"
+    process_status: str = "processed"
+    process_reason: str | None = None
+    calls: list[FinsCommandName] = field(default_factory=list)
+    materials: list[DocumentSourceInfo] = field(default_factory=list)
+
+    def submit(self, request: FinsSubmitRequest) -> FinsSubmission:
+        """记录调用并返回契约结果。
+
+        Args:
+            request: 页面提交请求。
+        Returns:
+            同步命令结果。
+        Raises:
+            RuntimeError: 注入的处理错误。
+        """
+        self.calls.append(request.command.name)
+        if request.command.name == FinsCommandName.UPLOAD_MATERIAL:
+            data = UploadMaterialResultData(pipeline="sec", status=self.upload_status,
+                                           ticker="AAPL", material_action="create", document_id="mat_test")
+        else:
+            if self.fail_processing:
+                raise RuntimeError("injected processing failure")
+            data = ProcessSingleResultData(pipeline="sec", action="process_material",
+                                           status=self.process_status, reason=self.process_reason,
+                                           ticker="AAPL", document_id="mat_test")
+        return FinsSubmission(session_id="test", execution=FinsResult(command=request.command.name, data=data))
+
+    def list_filings(self, ticker: str) -> list[FilingSummary]:
+        """返回空列表。
+
+        Args:
+            ticker: 公司代码。
+        Returns:
+            空财报列表。
+        Raises:
+            无。
+        """
+        return []
+
+
+    def list_materials(self, ticker: str) -> list[DocumentSourceInfo]:
+        """返回显式配置且属于当前公司的材料目录。
+
+        参数:
+            ticker: 待查询公司代码。
+        返回值:
+            当前公司的测试材料列表副本。
+        异常:
+            无。
+        """
+        return [material for material in self.materials if material.ticker == ticker]
+
+    def resolve_document_reference(self, request: DocumentReference) -> DocumentReferenceView:
+        """阻止上传页测试意外读取未提供的原文。
+
+        参数:
+            request: 意外请求的原文定位。
+        返回值:
+            不返回；上传编排只需材料目录。
+        异常:
+            AssertionError: 测试错误地请求原文聚合时抛出。
+        """
+        raise AssertionError(f"上传编排不应解析原文：{request.document_id}")
+
+
+def make_input(data: bytes = b"Q4 2023 Earnings Call") -> MaterialUploadInput:
+    """构造已确认上传项。
 
     Args:
-        file_name: 文件名。
-        material_name: 材料名。
-        fiscal_year: 财年。
-        fiscal_period: 财季。
-        needs_confirmation: 是否需要确认。
-        reason: 原因码。
-
+        data: 文件内容。
     Returns:
-        条目对象。
-
+        上传输入。
     Raises:
         无。
     """
-
-    return MaterialUploadEntry(
-        file_name=file_name,
-        material_name=material_name,
-        fiscal_year=fiscal_year,
-        fiscal_period=fiscal_period,
-        needs_confirmation=needs_confirmation,
-        reason=reason,
-    )
+    return MaterialUploadInput(MaterialUploadEntry("2023Q4_call.md", "Call", 2023, "Q4", False, "declaration"), data)
 
 
-def test_w1_each_file_gets_an_independent_entry() -> None:
-    """W1：多文件逐份产出条目，互不影响。"""
+def test_w1_independent_entries() -> None:
+    """参数：无。返回：无。异常：断言失败；逐文件推断不合并。"""
     entries = build_material_entries(["2023Q4_call.md", "2024Q1_call.txt", "notes.md"])
-
     assert len(entries) == 3
     assert (entries[0].fiscal_year, entries[0].fiscal_period) == (2023, "Q4")
-    assert (entries[1].fiscal_year, entries[1].fiscal_period) == (2024, "Q1")
-    assert entries[2].needs_confirmation is True
-    assert entries[2].fiscal_year is None
+    assert entries[2].needs_confirmation
 
 
-def test_w3_batch_key_is_stable_and_order_insensitive() -> None:
-    """W3：批次指纹与顺序无关，内容变化会产生新指纹。"""
-    first = batch_key(file_names=["a.md", "b.md"], sizes=[10, 20])
-    reordered = batch_key(file_names=["b.md", "a.md"], sizes=[20, 10])
-    changed = batch_key(file_names=["a.md", "b.md"], sizes=[10, 21])
-
-    assert first == reordered
-    assert first != changed
-
-
-def test_w3_mismatched_lengths_are_rejected() -> None:
-    """W3：文件名与大小数量不一致时拒绝计算。"""
-    with pytest.raises(ValueError, match="数量不一致"):
-        batch_key(file_names=["a.md"], sizes=[])
+def test_w3_identity_includes_content_company_and_user_edits() -> None:
+    """参数：无。返回：无。异常：断言失败；相同字节数不等于相同内容。"""
+    item = make_input(b"aaa")
+    key = material_input_key(ticker="AAPL", item=item)
+    assert key == material_input_key(ticker=" aapl ", item=item)
+    assert key != material_input_key(ticker="AAPL", item=make_input(b"bbb"))
+    assert key != material_input_key(ticker="MSFT", item=item)
+    assert key != material_input_key(ticker="AAPL", item=replace(item, entry=replace(item.entry, fiscal_year=2024)))
+    assert key != material_input_key(ticker="AAPL", item=replace(item, entry=replace(item.entry, material_name="Revision")))
 
 
-def test_w4_upload_request_builds_upload_material_command() -> None:
-    """W4：请求使用 upload_material 命令且不带覆盖。"""
-    entry = _entry()
-    request = build_upload_request(
-        ticker=" aapl ",
-        entry=entry,
-        file_path=Path("/tmp/2023Q4_call.md"),
-        fiscal_year=2023,
-        fiscal_period="q4",
-    )
-
-    command = request.command
-    assert command.name == FinsCommandName.UPLOAD_MATERIAL
-    assert command.stream is False
-    payload = command.payload
+def test_w4_upload_request_uses_existing_command() -> None:
+    """参数：无。返回：无。异常：断言失败；命令不得覆盖。"""
+    request = build_upload_request(company_name="Apple", ticker=" aapl ", entry=make_input().entry, file_path=Path("call.md"), fiscal_year=2023, fiscal_period="q4")
+    assert request.command.name == FinsCommandName.UPLOAD_MATERIAL
+    assert request.command.stream is False
+    payload = request.command.payload
     assert isinstance(payload, UploadMaterialCommandPayload)
-    assert payload.ticker == "AAPL"
     assert payload.form_type == "EARNINGS_CALL"
-    assert payload.material_name == "2023Q4_call"
-    assert payload.fiscal_year == 2023
-    assert payload.fiscal_period == "Q4"
-    assert payload.overwrite is False
-    assert payload.files == (Path("/tmp/2023Q4_call.md"),)
+    assert payload.ticker == "AAPL"
+    assert not payload.overwrite
 
 
-def test_w4_blank_ticker_is_rejected() -> None:
-    """W4：空 ticker 拒绝构造请求。"""
-    with pytest.raises(ValueError, match="ticker"):
-        build_upload_request(
-            ticker="  ",
-            entry=_entry(),
-            file_path=Path("/tmp/a.md"),
-            fiscal_year=2023,
-            fiscal_period="Q4",
-        )
+@pytest.mark.parametrize("ticker,period", [("", "Q4"), ("AAPL", "Q9")])
+def test_invalid_upload_request(ticker: str, period: str) -> None:
+    """参数：非法公司或财季。返回：无。异常：断言失败。"""
+    with pytest.raises(ValueError):
+        build_upload_request(company_name="Apple", ticker=ticker, entry=make_input().entry, file_path=Path("call.md"), fiscal_year=2023, fiscal_period=period)
 
 
-def _uploaded_data(status: str) -> UploadMaterialResultData:
-    """构造上传结果数据。
-
-    Args:
-        status: 上传状态。
-
-    Returns:
-        结果数据。
-
-    Raises:
-        无。
-    """
-
-    return UploadMaterialResultData(
-        pipeline="upload_material",
-        status=status,
-        ticker="AAPL",
-        material_action="create",
-    )
+@pytest.mark.parametrize("status,reason,expected", [
+    ("ok", None, STATUS_PROCESSING),
+    ("skipped", "already_uploaded", STATUS_PROCESSING),
+    ("skipped", "unknown", STATUS_FAILED),
+    ("failed", None, STATUS_FAILED),
+])
+def test_upload_success_is_not_ready(status: str, reason: str | None, expected: str) -> None:
+    """参数：真实上传状态与原因。返回：无。异常：断言失败。"""
+    data = UploadMaterialResultData(pipeline="sec", status=status, skip_reason=reason, ticker="AAPL", material_action="create", document_id="mat_test")
+    assert apply_result(entry=make_input().entry, data=data).status == expected
 
 
-def test_w2_uploaded_result_maps_to_submitted() -> None:
-    """W2：上传成功的文件映射为已提交。"""
-    row = apply_result(entry=_entry(), data=_uploaded_data("uploaded"))
-
-    assert row.status == STATUS_SUBMITTED
-    assert row.file_name == "2023Q4_call.md"
+def test_upload_without_document_id_is_failed() -> None:
+    """参数：无。返回：无。异常：断言失败；不伪造处理身份。"""
+    data = UploadMaterialResultData(pipeline="sec", status="ok", ticker="AAPL", material_action="create")
+    assert apply_result(entry=make_input().entry, data=data).status == STATUS_FAILED
 
 
-def test_w2_failed_status_maps_to_failed() -> None:
-    """W2：非 uploaded 状态映射为失败并带原因。"""
-    row = apply_result(entry=_entry(), data=_uploaded_data("skipped"))
+def test_s3_resume_only_processing_and_ready_rerun_is_noop(tmp_path: Path) -> None:
+    """参数：临时目录。返回：无。异常：断言失败；恢复不得重传。"""
+    service = RecordingService(fail_processing=True)
+    progress: list[MaterialUploadRow] = []
+    item = make_input()
+    failed = execute_material_input(ticker="AAPL", company_name="Apple", item=item, workspace_root=tmp_path, fins_service=service, on_progress=progress.append)
+    assert failed.status == STATUS_FAILED
+    assert failed.document_id == "mat_test"
+    assert progress[-1].status == STATUS_PROCESSING
+    service.fail_processing = False
+    ready = execute_material_input(ticker="AAPL", company_name="Apple", item=item, workspace_root=tmp_path, fins_service=service, previous=failed)
+    assert ready.status == STATUS_READY
+    assert service.calls == [FinsCommandName.UPLOAD_MATERIAL, FinsCommandName.PROCESS_MATERIAL, FinsCommandName.PROCESS_MATERIAL]
+    assert execute_material_input(ticker="AAPL", company_name="Apple", item=item, workspace_root=tmp_path, fins_service=service, previous=ready) == ready
+    assert len(service.calls) == 3
 
-    assert row.status == STATUS_FAILED
-    assert "skipped" in row.message
+
+@pytest.mark.parametrize("status,reason,expected", [
+    ("skipped", "version_matched", STATUS_READY),
+    ("skipped", "ingest_incomplete", STATUS_FAILED),
+    ("failed", None, STATUS_FAILED),
+])
+def test_only_valid_processed_snapshot_is_ready(tmp_path: Path, status: str, reason: str | None, expected: str) -> None:
+    """参数：临时目录及处理结果。返回：无。异常：断言失败。"""
+    service = RecordingService(process_status=status, process_reason=reason)
+    result = execute_material_input(ticker="AAPL", company_name="Apple", item=make_input(), workspace_root=tmp_path, fins_service=service)
+    assert result.status == expected
+
+
+def test_unconfirmed_and_path_traversal_do_not_submit(tmp_path: Path) -> None:
+    """参数：临时目录。返回：无。异常：断言失败；非法输入不得调用服务。"""
+    service = RecordingService()
+    item = make_input()
+    unconfirmed = replace(item, entry=replace(item.entry, needs_confirmation=True))
+    assert execute_material_input(ticker="AAPL", company_name="Apple", item=unconfirmed, workspace_root=tmp_path, fins_service=service).status == STATUS_PENDING_CONFIRMATION
+    unsafe = replace(item, entry=replace(item.entry, file_name="../evil.md"))
+    assert execute_material_input(ticker="AAPL", company_name="Apple", item=unsafe, workspace_root=tmp_path, fins_service=service).status == STATUS_FAILED
+    assert not service.calls
+
+
+def test_upload_failure_does_not_process_or_block_other_file(tmp_path: Path) -> None:
+    """参数：临时目录。返回：无。异常：断言失败；逐文件隔离。"""
+    service = RecordingService(upload_status="failed")
+    failed = execute_material_input(ticker="AAPL", company_name="Apple", item=make_input(), workspace_root=tmp_path, fins_service=service)
+    assert failed.status == STATUS_FAILED and failed.document_id is None
+    assert service.calls == [FinsCommandName.UPLOAD_MATERIAL]
+    service.upload_status = "ok"
+    assert execute_material_input(ticker="AAPL", company_name="Apple", item=make_input(b"other"), workspace_root=tmp_path, fins_service=service).status == STATUS_READY

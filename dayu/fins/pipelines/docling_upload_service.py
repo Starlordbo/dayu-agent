@@ -29,6 +29,7 @@ from dayu.fins.domain.document_models import (
     now_iso8601,
 )
 from dayu.fins.domain.enums import SourceKind
+from dayu.fins.pipelines.earnings_call_quality import assess_conversion_reason
 from dayu.fins.pipelines.json_types import JsonValue
 from dayu.fins.storage import DocumentBlobRepositoryProtocol, SourceDocumentRepositoryProtocol
 from dayu.fins.ticker_normalization import try_normalize_ticker
@@ -54,6 +55,7 @@ SUPPORTED_UPLOAD_SUFFIXES = frozenset(
 )
 UPLOAD_ACTIONS = frozenset({"create", "update", "delete"})
 DOCLING_FILE_SUFFIX = "_docling.json"
+_EARNINGS_CALL_FORM_TYPE = "EARNINGS_CALL"
 
 UploadFileEventType = Literal[
     "conversion_started",
@@ -114,6 +116,7 @@ class DoclingUploadService:
             blob_repository: 文档文件对象仓储实现。
             convert_with_docling: 可选 Docling 转换函数（测试可注入）。
             assess_docling: 可选转换结果质量否决回调；返回原因即拒绝入库。
+                未提供时，EARNINGS_CALL 使用内置质量门，其他类型保持不评估。
 
         Returns:
             无。
@@ -154,7 +157,7 @@ class DoclingUploadService:
             internal_document_id: 内部文档 ID。
             form_type: 文档 form_type。
             files: 上传文件列表。
-            overwrite: 是否强制覆盖。
+            overwrite: 是否强制覆盖；EARNINGS_CALL 首版只允许 False。
             meta: 业务元数据字段。
 
         Returns:
@@ -163,7 +166,8 @@ class DoclingUploadService:
         Raises:
             ValueError: 参数非法时抛出。
             FileNotFoundError: 需要的文件或文档不存在时抛出。
-            RuntimeError: 上传失败时抛出。
+            FileExistsError: 同身份 EARNINGS_CALL 的源指纹不同，或创建目标已存在时抛出。
+            RuntimeError: 转换质量不合格或上传失败时抛出。
         """
 
         normalized_action = action.strip().lower()
@@ -176,6 +180,7 @@ class DoclingUploadService:
             raise ValueError("internal_document_id 不能为空")
         if not form_type.strip():
             raise ValueError("form_type 不能为空")
+        validate_material_upload_overwrite(form_type=form_type, overwrite=overwrite)
 
         if normalized_action == "delete":
             self._delete_source_document(
@@ -220,7 +225,23 @@ class DoclingUploadService:
                 },
             )
 
-        pending_assets, conversion_events = self._build_pending_assets(validated_files, original_assets)
+        is_earnings_call = form_type.strip().upper() == _EARNINGS_CALL_FORM_TYPE
+        if (
+            is_earnings_call
+            and previous_meta is not None
+            and str(previous_meta.get("source_fingerprint", "")).strip() != source_fingerprint
+        ):
+            # store_file 会按同名路径写入，身份冲突必须在转换和任何文件落盘前拒绝。
+            raise FileExistsError(
+                f"EARNINGS_CALL 同身份材料已存在且内容不同: {document_id}；"
+                "请修改 material_name 另存为独立材料，原材料保持不变"
+            )
+        assessor = self._assess_docling
+        if assessor is None and is_earnings_call:
+            assessor = assess_conversion_reason
+        pending_assets, conversion_events = self._build_pending_assets(
+            validated_files, original_assets, assess_docling=assessor
+        )
         stored_entries: list[dict[str, Any]] = []
         file_events: list[UploadFileEventPayload] = list(conversion_events)
         handle = SourceHandle(
@@ -418,18 +439,21 @@ class DoclingUploadService:
         self,
         files: list[Path],
         original_assets: list[_PendingFileAsset],
+        *,
+        assess_docling: Optional[ConversionAssessor],
     ) -> tuple[list[_PendingFileAsset], list[UploadFileEventPayload]]:
         """构建待上传资产列表与转换阶段事件。
 
         Args:
             files: 源文件列表。
             original_assets: 已读取完成的原始文件资产列表，顺序与 ``files`` 一一对应。
+            assess_docling: 当前上传类型的质量否决回调；None 表示不评估。
 
         Returns:
             `(待上传资产列表, 转换阶段事件列表)` 二元组。
 
         Raises:
-            RuntimeError: Docling 转换失败时抛出。
+            RuntimeError: Docling 转换失败或质量不合格时抛出。
             ValueError: ``files`` 与 ``original_assets`` 长度不一致时抛出。
         """
 
@@ -450,8 +474,8 @@ class DoclingUploadService:
                 )
             )
             docling_payload = self._convert_with_docling(original_asset.data, file_path.name)
-            if self._assess_docling is not None:
-                reject_reason = self._assess_docling(docling_payload)
+            if assess_docling is not None:
+                reject_reason = assess_docling(docling_payload)
                 if reject_reason is not None:
                     # 转换成功但内容不可问答：拒绝入库，避免坏材料被登记为已处理。
                     raise RuntimeError(f"转换结果不可问答: {file_path.name}: {reject_reason}")
@@ -977,6 +1001,26 @@ def resolve_upload_action(
     if previous_meta is None:
         return "create"
     return "update"
+
+
+def validate_material_upload_overwrite(*, form_type: str, overwrite: bool) -> None:
+    """校验材料覆盖策略，供上传入口在任何仓储写入或重置前调用。
+
+    Args:
+        form_type: 材料类型，忽略首尾空白与大小写。
+        overwrite: 是否请求覆盖；EARNINGS_CALL 首版只允许 False。
+
+    Returns:
+        无；其他材料类型保持现有覆盖行为。
+
+    Raises:
+        ValueError: EARNINGS_CALL 请求 overwrite=True 时抛出。
+    """
+
+    if overwrite and form_type.strip().upper() == _EARNINGS_CALL_FORM_TYPE:
+        raise ValueError(
+            "EARNINGS_CALL 首版不支持 overwrite=True；请修改 material_name 另存为独立材料"
+        )
 
 
 def reset_upload_target_for_overwrite(

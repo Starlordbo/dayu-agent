@@ -19,6 +19,7 @@ from dayu.host.protocols import (
 from dayu.log import Log
 from dayu.services.protocols import ChatServiceProtocol
 from dayu.web.streamlit.components.watchlist import WatchlistItem
+from dayu.web.streamlit.pages.chat.citations import render_citation_links
 from dayu.web.streamlit.pages.chat.stream_runtime import (
     ChatStreamFrameState,
     read_stream_frame_state,
@@ -170,12 +171,12 @@ def _render_message_history(messages: list[ChatMessage]) -> None:
                     with st.expander(_THINKING_EXPANDER_TITLE, expanded=True):
                         st.markdown(message.reasoning_content)
                 if message.role == "assistant":
-                    st.markdown(message.content)
+                    st.markdown(render_citation_links(message.content, st.query_params.to_dict()))
                 else:
                     st.markdown(message.content)
 
 
-def _render_stream_frame(*, title, state: ChatStreamFrameState) -> None:
+def _render_stream_frame(*, title: str, state: ChatStreamFrameState) -> None:
     """渲染当前流式帧的思考与正文。
 
     参数:
@@ -194,7 +195,9 @@ def _render_stream_frame(*, title, state: ChatStreamFrameState) -> None:
             st.markdown(normalize_stream_text_for_markdown(state.reasoning_text))
         elif not state.done:
             st.markdown("正在思考...")
-    st.markdown(normalize_stream_text_for_markdown(state.answer_text))
+    st.markdown(
+        render_citation_links(normalize_stream_text_for_markdown(state.answer_text), st.query_params.to_dict())
+    )
 
 
 def load_history_for_ticker(

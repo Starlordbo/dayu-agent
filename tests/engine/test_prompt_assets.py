@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -65,7 +66,9 @@ def _require_context_slots(manifest: SceneManifestAsset) -> tuple[str, ...]:
     return tuple(manifest["context_slots"])
 
 
+# 包内配置仍默认使用 mimo plan；Responses 是新增的可选模型，不替换默认值。
 _EXPECTED_THINKING_ALLOWED_NAMES: list[str] = [
+    "openai-responses",
     "mimo-v2.5-pro-thinking",
     "mimo-v2.5-pro-thinking-plan",
     "mimo-v2.5-pro-thinking-plan-sg",
@@ -79,6 +82,7 @@ _EXPECTED_THINKING_ALLOWED_NAMES: list[str] = [
 ]
 
 _EXPECTED_CONVERSATION_COMPACTION_ALLOWED_NAMES: list[str] = [
+    "openai-responses",
     "mimo-v2.5-pro-thinking",
     "mimo-v2.5-pro-thinking-plan",
     "mimo-v2.5-pro-thinking-plan-sg",
@@ -92,6 +96,7 @@ _EXPECTED_CONVERSATION_COMPACTION_ALLOWED_NAMES: list[str] = [
 ]
 
 _EXPECTED_WRITE_ALLOWED_NAMES: list[str] = [
+    "openai-responses",
     "mimo-v2.5-pro",
     "mimo-v2.5-pro-plan",
     "mimo-v2.5-pro-plan-sg",
@@ -103,6 +108,69 @@ _EXPECTED_WRITE_ALLOWED_NAMES: list[str] = [
     "claude-sonnet-4-6",
     "gemini-2.5-flash",
 ]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("scene_name", "expected_default", "expected_allowed_names"),
+    [
+        ("interactive", "mimo-v2.5-pro-thinking-plan", _EXPECTED_THINKING_ALLOWED_NAMES),
+        ("write", "mimo-v2.5-pro-plan", _EXPECTED_WRITE_ALLOWED_NAMES),
+    ],
+)
+def test_package_scene_models_are_isolated_from_workspace_overrides(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scene_name: str,
+    expected_default: str,
+    expected_allowed_names: list[str],
+) -> None:
+    """验证包内模型断言不受当前目录的 workspace 覆盖影响。
+
+    Args:
+        tmp_path: pytest 提供的独立临时目录。
+        monkeypatch: 用于临时切换当前目录的 pytest 工具。
+        scene_name: 覆盖推理与写作两类包内场景的名称。
+        expected_default: 包内场景明确声明的默认模型。
+        expected_allowed_names: 包内场景明确声明的有序模型白名单。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 包内配置被覆盖污染，或显式覆盖未生效。
+        OSError: 临时覆盖配置无法写入。
+    """
+
+    workspace_config = tmp_path / "workspace" / "config"
+    override_path = workspace_config / "prompts" / "manifests" / f"{scene_name}.json"
+    override_path.parent.mkdir(parents=True)
+    override_manifest = FilePromptAssetStore(ConfigFileResolver()).load_scene_manifest(scene_name)
+    override_name = "workspace-only-model"
+    override_manifest["model"] = {
+        "default_name": override_name,
+        "allowed_names": [override_name],
+        "temperature_profile": override_manifest["model"]["temperature_profile"],
+    }
+    override_path.write_text(json.dumps(override_manifest), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    # 使用全新仓储，避免缓存掩盖错误的 workspace 自动发现行为。
+    resolver = ConfigFileResolver()
+    assert resolver.config_dirs == [Path(__file__).resolve().parents[2] / "dayu" / "config"]
+    package_store = FilePromptAssetStore(resolver)
+    package_manifest = package_store.load_scene_manifest(scene_name)
+    package_definition = load_scene_definition(package_store, scene_name)
+    assert package_manifest["model"]["default_name"] == expected_default
+    assert package_manifest["model"]["allowed_names"] == expected_allowed_names
+    assert package_definition.model.default_name == expected_default
+    assert package_definition.model.allowed_names == tuple(expected_allowed_names)
+
+    # 正向对照：同一覆盖文件只有显式注入工作区目录时才应生效。
+    workspace_store = FilePromptAssetStore(ConfigFileResolver(workspace_config))
+    workspace_definition = load_scene_definition(workspace_store, scene_name)
+    assert workspace_definition.model.default_name == override_name
+    assert workspace_definition.model.allowed_names == (override_name,)
 
 
 @pytest.mark.unit

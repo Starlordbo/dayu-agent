@@ -15,12 +15,12 @@
 
 from __future__ import annotations
 
-from typing import Any, NotRequired, TypedDict
-
+from typing import Any, Literal, NotRequired, TypedDict
 
 # ---------------------------------------------------------------------------
 # 共享子结构
 # ---------------------------------------------------------------------------
+
 
 class ErrorDetail(TypedDict):
     """工具错误详情。"""
@@ -49,6 +49,7 @@ class ListDocumentsFilters(TypedDict):
 # NotSupportedResult — 三个降级路径共享
 # ---------------------------------------------------------------------------
 
+
 class _NotSupportedBase(TypedDict):
     """降级返回的基础字段，始终由 ``_build_not_supported_result`` 填充。"""
 
@@ -76,6 +77,7 @@ class NotSupportedResult(_NotSupportedBase, total=False):
 # list_documents
 # ---------------------------------------------------------------------------
 
+
 class ListDocumentsResult(TypedDict):
     """``list_documents`` 返回结构。"""
 
@@ -93,6 +95,7 @@ class ListDocumentsResult(TypedDict):
 # get_document_sections
 # ---------------------------------------------------------------------------
 
+
 class DocumentSectionsResult(TypedDict):
     """``get_document_sections`` 返回结构。"""
 
@@ -105,6 +108,19 @@ class DocumentSectionsResult(TypedDict):
 # ---------------------------------------------------------------------------
 # read_section
 # ---------------------------------------------------------------------------
+
+
+class EarningsCallPassageResult(TypedDict):
+    """纪要片段的原文范围及明确身份依据；不推断未知角色。"""
+
+    start: int
+    end: int
+    text: str
+    speaker: str | None
+    role: Literal["analyst", "management", "operator", "unknown"]
+    kind: Literal["question", "statement", "unknown"]
+    evidence: str | None
+
 
 class SectionContentResult(TypedDict):
     """``read_section`` 返回结构。
@@ -123,12 +139,15 @@ class SectionContentResult(TypedDict):
     children: list[dict[str, str]]
     page_range: list[int] | None
     content_word_count: int
+    contains_full_text: bool
+    passages: list[EarningsCallPassageResult]
     citation: dict[str, Any]
 
 
 # ---------------------------------------------------------------------------
 # search_document（单查询 + 批量查询）
 # ---------------------------------------------------------------------------
+
 
 class SearchDocumentResult(TypedDict):
     """``search_document`` 返回结构。
@@ -163,6 +182,7 @@ class SearchDocumentResult(TypedDict):
 # list_tables
 # ---------------------------------------------------------------------------
 
+
 class TablesListResult(TypedDict):
     """``list_tables`` 返回结构。"""
 
@@ -177,6 +197,7 @@ class TablesListResult(TypedDict):
 # ---------------------------------------------------------------------------
 # get_table
 # ---------------------------------------------------------------------------
+
 
 class TableDetailResult(TypedDict):
     """``get_table`` 返回结构。
@@ -203,6 +224,7 @@ class TableDetailResult(TypedDict):
 # get_page_content
 # ---------------------------------------------------------------------------
 
+
 class PageContentResult(TypedDict):
     """``get_page_content`` 返回结构。"""
 
@@ -221,6 +243,7 @@ class PageContentResult(TypedDict):
 # ---------------------------------------------------------------------------
 # get_financial_statement
 # ---------------------------------------------------------------------------
+
 
 class StatementLocator(TypedDict, total=False):
     """财务报表定位信息。"""
@@ -261,6 +284,7 @@ class FinancialStatementResult(_FinancialStatementBase, total=False):
 # ---------------------------------------------------------------------------
 # query_xbrl_facts
 # ---------------------------------------------------------------------------
+
 
 class _XbrlQueryParamsBase(TypedDict):
     """查询参数核心字段。"""

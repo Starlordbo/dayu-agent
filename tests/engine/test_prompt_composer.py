@@ -21,6 +21,7 @@ from dayu.startup.config_file_resolver import ConfigFileResolver
 from dayu.startup.prompt_assets import FilePromptAssetStore
 
 _EXPECTED_THINKING_ALLOWED_NAMES: tuple[str, ...] = (
+    "openai-responses",
     "mimo-v2.5-pro-thinking",
     "mimo-v2.5-pro-thinking-plan",
     "mimo-v2.5-pro-thinking-plan-sg",

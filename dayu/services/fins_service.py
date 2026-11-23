@@ -8,6 +8,14 @@ from typing import AsyncIterator, Callable
 from dayu.contracts.fins import FinsCommand, FinsEvent, FinsEventType, FinsResult
 from dayu.contracts.session import SessionRecord, SessionSource
 from dayu.fins.domain.document_models import FilingSummary
+from dayu.fins.domain.document_reference import (
+    DocumentReference,
+    DocumentReferenceView,
+    DocumentSourceInfo,
+    SourceSectionSummary,
+    SourceSectionView,
+)
+from dayu.fins.earnings_call_passages import EarningsCallPassage
 from dayu.fins.service_runtime import FinsRuntimeProtocol
 from dayu.contracts.host_execution import HostedRunContext, HostedRunSpec
 from dayu.host.protocols import HostedExecutionGatewayProtocol
@@ -155,6 +163,65 @@ class FinsService(FinsServiceProtocol):
         if not isinstance(result, FinsResult):
             raise TypeError(f"同步执行应返回 FinsResult，实际得到 {type(result).__name__}")
         return result
+
+    def resolve_document_reference(self, request: DocumentReference) -> DocumentReferenceView:
+        """只读聚合引用信息，以当前源仓储状态为准，不上传、不处理、不调用模型。
+
+        Args:
+            request: 公司、文档及可选章节 ref。
+        Returns:
+            完整文档头、目录和指定章节正文；混合发言按原文片段呈现。
+        Raises:
+            ValueError: 定位非法或原文尚未完整入库。
+            FileNotFoundError: 文档不存在或已删除。
+            ToolArgumentError: 公司、文档或章节无法精确定位。
+        """
+        for value in (request.ticker, request.document_id, request.section_ref):
+            if value is not None and (
+                not value
+                or len(value) > 256
+                or ".." in value
+                or any(not (char.isalnum() or char in "._-") for char in value)
+            ):
+                raise ValueError("原文定位参数非法")
+        tool_service = self.fins_runtime.get_tool_service()
+        info = tool_service.get_document_info(ticker=request.ticker, document_id=request.document_id)
+        sections_result = tool_service.get_document_sections(ticker=info.ticker, document_id=info.document_id)
+        sections = tuple(
+            SourceSectionSummary(ref=section["ref"], title=section.get("title"))
+            for section in sections_result["sections"]
+        )
+        selected = None
+        if request.section_ref is not None:
+            content = tool_service.read_section(
+                ticker=info.ticker, document_id=info.document_id, ref=request.section_ref
+            )
+            selected = SourceSectionView(
+                ref=content["ref"],
+                title=content["title"],
+                content=content["content"],
+                contains_full_text=content["contains_full_text"],
+                page_range=tuple(content["page_range"] or []),
+                passages=tuple(EarningsCallPassage(**passage) for passage in content["passages"]),
+            )
+        return DocumentReferenceView(info=info, sections=sections, selected_section=selected)
+
+    def list_materials(self, ticker: str) -> list[DocumentSourceInfo]:
+        """从仓储发现已入库电话会议材料，刷新页面后仍能查询真实标题与财季。
+
+        Args:
+            ticker: 公司代码。
+        Returns:
+            材料文档头列表；不包含已删除或未完整入库材料。
+        Raises:
+            ToolBusinessError: 公司不存在。
+        """
+        tool_service = self.fins_runtime.get_tool_service()
+        documents = tool_service.list_documents(ticker=ticker, document_types=["earnings_call"])
+        return [
+            tool_service.get_document_info(ticker=documents["company"]["ticker"], document_id=document["document_id"])
+            for document in documents["documents"]
+        ]
 
     def list_filings(self, ticker: str) -> list[FilingSummary]:
         """查询指定股票的已下载财报列表。

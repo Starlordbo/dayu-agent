@@ -47,7 +47,7 @@ def _convert_stub(raw_data: bytes, stream_name: str) -> dict[str, Any]:
     _ = raw_data
     if "bad" in stream_name:
         raise RuntimeError("convert failed")
-    return {"name": stream_name, "source": "docling"}
+    return {"name": stream_name, "source": "docling", "texts": [{"text": "Revenue grew during Q4."}]}
 
 
 def _build_context(tmp_path: Path) -> tuple[FsStorageTestContext, DoclingUploadService, DoclingEarningsCallUploader]:
