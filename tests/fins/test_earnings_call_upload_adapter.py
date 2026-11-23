@@ -221,3 +221,32 @@ def test_uploader_rejects_blank_ticker(tmp_path: Path) -> None:
         assert "ticker" in str(error)
     else:  # pragma: no cover - 防御性分支
         raise AssertionError("空 ticker 未被拒绝")
+
+
+def test_s5_same_quarter_different_call_is_not_treated_as_revision(tmp_path: Path) -> None:
+    """S5：同季不同电话会各自登记，不覆盖旧件。"""
+    context, _, uploader = _build_context(tmp_path)
+    first_path = _write(tmp_path / "2023Q4_main.md", "main call body")
+    second_path = _write(tmp_path / "2023Q4_followup.md", "follow-up call body")
+    first_request = _request(first_path, "2023Q4 Q&A Call")
+    second_request = _request(second_path, "2023Q4 Follow-up Call")
+
+    first_plans = build_batch_plan(requests=[first_request], existing_by_id={})
+    execute_batch(plans=first_plans, uploader=uploader)
+    first_meta = context.source_repository.get_source_meta(
+        TICKER, first_plans[0].document_id, SourceKind.MATERIAL
+    )
+
+    existing = uploader.read_existing([first_plans[0].document_id])
+    second_plans = build_batch_plan(requests=[second_request], existing_by_id=existing)
+    execute_batch(plans=second_plans, uploader=uploader)
+
+    assert second_plans[0].document_id != first_plans[0].document_id
+    untouched = context.source_repository.get_source_meta(
+        TICKER, first_plans[0].document_id, SourceKind.MATERIAL
+    )
+    assert untouched["source_fingerprint"] == first_meta["source_fingerprint"]
+    created = context.source_repository.get_source_meta(
+        TICKER, second_plans[0].document_id, SourceKind.MATERIAL
+    )
+    assert created["ingest_complete"] is True
