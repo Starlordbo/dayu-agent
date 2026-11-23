@@ -591,16 +591,17 @@ _EARNINGS_CALL_PERIOD_MARKERS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ),
 )
 
-# 对比与展望语境：命中后到句末的内容不参与当期归属判定。
+# 对比与展望语境：命中后到当前分句结束的内容不参与当期归属判定。
 _EARNINGS_CALL_NOISE_PATTERN: re.Pattern[str] = re.compile(
     r"(?:compared\s+(?:with|to)|versus|vs\.?|prior[\s-]*year|previous[\s-]*year|"
     r"last[\s-]*year|outlook|guidance|forecast|expects?|expecting|looking\s+ahead|"
-    r"ahead\s+of|next\s+year|going\s+forward)",
+    r"ahead\s+of|next\s+year|going\s+forward|"
+    r"与[^，。；,;]{0,24}相比|相比之下?|较上年|展望|预计|预期|明年)",
     re.IGNORECASE,
 )
 
-# 句子终止符：删除对比/展望片段时用于确定截断位置。
-_EARNINGS_CALL_SENTENCE_STOPS: str = ".。;；!?！？"
+# 分句终止符：删除对比/展望片段时只删到当前分句结束，避免误伤同一句正文。
+_EARNINGS_CALL_CLAUSE_STOPS: str = ",，;；.。!?！？"
 
 # 年份匹配：电话会议纪要只使用四位公元年份。
 _EARNINGS_CALL_YEAR_PATTERN: re.Pattern[str] = re.compile(r"(?:19|20)\d{2}")
@@ -632,13 +633,16 @@ class EarningsCallFiscalGuess:
 
 
 def _strip_earnings_call_noise(text: str) -> str:
-    """删除对比与展望语境，避免历史或未来年份干扰当期归属。
+    """删除对比与展望分句，避免历史或未来年份干扰当期归属。
+
+    只删到当前分句结束（逗号或句末），因此 "Compared with 2022, Q4 2023 grew."
+    这类前置对比从句不会连正文一起删掉。
 
     Args:
         text: 原始声明文本（开场白、标题或文件名）。
 
     Returns:
-        删除对比/展望片段后的文本；空输入返回空字符串。
+        删除对比/展望分句后的文本；空输入返回空字符串。
 
     Raises:
         无。
@@ -652,7 +656,7 @@ def _strip_earnings_call_noise(text: str) -> str:
             continue
         end = len(text)
         for index in range(match.end(), len(text)):
-            if text[index] in _EARNINGS_CALL_SENTENCE_STOPS:
+            if text[index] in _EARNINGS_CALL_CLAUSE_STOPS:
                 end = index + 1
                 break
         pieces.append(text[cursor:match.start()])
@@ -661,44 +665,57 @@ def _strip_earnings_call_noise(text: str) -> str:
     return "".join(pieces)
 
 
-def _detect_declared_periods(text: str) -> list[tuple[str, int]]:
-    """找出文本中声明的财季及其首次出现位置。
+def _detect_declared_periods(text: str) -> list[tuple[str, int, int]]:
+    """找出文本中声明的全部财季及其出现区间。
 
     Args:
-        text: 已去除对比/展望语境的文本。
+        text: 已去除对比/展望分句的文本。
 
     Returns:
-        按出现位置升序排列的 `(period, position)` 列表；无声明时为空列表。
+        按出现位置升序排列的 `(period, start, end)` 列表；无声明时为空列表。
 
     Raises:
         无。
     """
-    found: list[tuple[str, int]] = []
+    found: list[tuple[str, int, int]] = []
     for period, pattern in _EARNINGS_CALL_PERIOD_MARKERS:
-        match = pattern.search(text)
-        if match is not None:
-            found.append((period, match.start()))
-    found.sort(key=lambda item: item[1])
+        for match in pattern.finditer(text):
+            found.append((period, match.start(), match.end()))
+    found.sort(key=lambda item: (item[1], item[2]))
     return found
 
 
-def _year_near(text: str, position: int) -> Optional[int]:
-    """在标记附近的窗口内查找财年。
+def _year_near(text: str, *, start: int, end: int) -> Optional[int]:
+    """取离财季标记最近的年份。
+
+    跨公司、跨期引用会让同一窗口出现多个年份，取“最近”而不是“最左”，
+    避免 "乙公司 2022；甲公司 Q4 2023" 这类文本被前一个年份串走。
 
     Args:
-        text: 已去除对比/展望语境的文本。
-        position: 财季标记的起始下标。
+        text: 已去除对比/展望分句的文本。
+        start: 财季标记起始下标。
+        end: 财季标记结束下标。
 
     Returns:
-        窗口内的四位年份；窗口内没有年份时返回 `None`。
+        距标记最近的四位年份；窗口内没有年份时返回 `None`。
 
     Raises:
         无。
     """
-    start = max(0, position - _EARNINGS_CALL_YEAR_WINDOW_BEFORE)
-    end = min(len(text), position + _EARNINGS_CALL_YEAR_WINDOW_AFTER)
-    match = _EARNINGS_CALL_YEAR_PATTERN.search(text[start:end])
-    return int(match.group(0)) if match is not None else None
+    window_start = max(0, start - _EARNINGS_CALL_YEAR_WINDOW_BEFORE)
+    window_end = min(len(text), end + _EARNINGS_CALL_YEAR_WINDOW_AFTER)
+    marker_center = (start + end) // 2
+    best_score: Optional[tuple[int, int]] = None
+    best_year: Optional[int] = None
+    for match in _EARNINGS_CALL_YEAR_PATTERN.finditer(text, window_start, window_end):
+        distance = abs(match.start() - marker_center)
+        # 距离相同时优先标记之后的年份（"Q4 2023" 比 "2023 Q4" 更常见）。
+        preference = 0 if match.start() >= marker_center else 1
+        score = (distance, preference)
+        if best_score is None or score < best_score:
+            best_score = score
+            best_year = int(match.group(0))
+    return best_year
 
 
 def infer_earnings_call_fiscal(
@@ -730,7 +747,8 @@ def infer_earnings_call_fiscal(
         "title": title,
         "filename": filename,
     }
-    candidates: list[tuple[str, str, Optional[int], bool]] = []
+    # (来源, 财季, 年份, 是否季+全年并存, 是否同源多季)
+    candidates: list[tuple[str, str, Optional[int], bool, bool]] = []
     for source in EARNINGS_CALL_SOURCE_ORDER:
         raw = sources[source]
         if raw is None or not raw.strip():
@@ -739,14 +757,23 @@ def infer_earnings_call_fiscal(
         declarations = _detect_declared_periods(cleaned)
         if not declarations:
             continue
-        quarters = [item for item in declarations if item[0] in _QUARTER_PERIODS]
-        has_fy = any(period == "FY" for period, _ in declarations)
-        if quarters and has_fy:
-            period, position = quarters[0]
-            candidates.append((source, period, _year_near(cleaned, position), True))
-            continue
-        period, position = declarations[0]
-        candidates.append((source, period, _year_near(cleaned, position), False))
+        # 取最早出现的声明：标题通常先写当期口径（"Full Year 2023 with Q4 details"
+        # 的主口径是全年，"Q4 and Full Year 2023" 的主口径是 Q4）。
+        period, start, end = declarations[0]
+        quarters = {item[0] for item in declarations if item[0] in _QUARTER_PERIODS}
+        has_fy = any(item[0] == "FY" for item in declarations)
+        combined = bool(quarters) and has_fy
+        # 同一文本出现多个不同季度（如 "Q4 2023 and Q2 2024"）时不能静默取首个。
+        intra_conflict = len(quarters) > 1
+        candidates.append(
+            (
+                source,
+                period,
+                _year_near(cleaned, start=start, end=end),
+                combined,
+                intra_conflict,
+            )
+        )
 
     if not candidates:
         return EarningsCallFiscalGuess(
@@ -758,22 +785,23 @@ def infer_earnings_call_fiscal(
             reason=REASON_NO_DECLARATION,
         )
 
-    primary_source, primary_period, primary_year, primary_combined = candidates[0]
+    primary_source, primary_period, primary_year, primary_combined, primary_intra_conflict = candidates[0]
     year = primary_year
     if year is None:
-        for _, other_period, other_year, _ in candidates[1:]:
+        for _, other_period, other_year, _, _ in candidates[1:]:
             if other_period == primary_period and other_year is not None:
                 year = other_year
                 break
 
-    conflict = False
-    for _, other_period, other_year, _ in candidates[1:]:
-        if other_period != primary_period:
-            conflict = True
-            break
-        if other_year is not None and year is not None and other_year != year:
-            conflict = True
-            break
+    conflict = primary_intra_conflict
+    if not conflict:
+        for _, other_period, other_year, _, _ in candidates[1:]:
+            if other_period != primary_period:
+                conflict = True
+                break
+            if other_year is not None and year is not None and other_year != year:
+                conflict = True
+                break
 
     if conflict:
         reason = REASON_CONFLICT

@@ -152,3 +152,50 @@ def test_blank_inputs_are_treated_as_no_declaration(blank: Optional[str]) -> Non
     assert guess.fiscal_period is None
     assert guess.needs_confirmation is True
     assert guess.reason == REASON_NO_DECLARATION
+
+
+def test_intra_source_multiple_quarters_require_confirmation() -> None:
+    """同一标题出现两个不同季度时不得静默取第一个。"""
+    guess = infer_earnings_call_fiscal(title="Q4 2023 and Q2 2024 Results")
+    _assert_guess(
+        guess,
+        year=2023,
+        period="Q4",
+        source="title",
+        needs_confirmation=True,
+        conflict=True,
+        reason=REASON_CONFLICT,
+    )
+
+
+def test_full_year_with_quarter_details_keeps_fy() -> None:
+    """“全年为主、季度为细节”的标题保留 FY。"""
+    guess = infer_earnings_call_fiscal(title="Full Year 2023 with Q4 details")
+    _assert_guess(guess, year=2023, period="FY", source="title", reason=REASON_Q4_AND_FY)
+
+
+def test_chinese_comparison_clause_is_ignored() -> None:
+    """中文对比分句不改变当期财季与年份。"""
+    guess = infer_earnings_call_fiscal(opening="与2022年Q4相比，2023年Q4收入增长明显。")
+    _assert_guess(guess, year=2023, period="Q4", source="opening")
+
+
+def test_leading_comparison_clause_keeps_main_clause() -> None:
+    """前置英文对比从句只删到逗号，不吞掉主句。"""
+    guess = infer_earnings_call_fiscal(opening="Compared with 2022, Q4 2023 revenue grew.")
+    _assert_guess(guess, year=2023, period="Q4", source="opening")
+
+
+def test_publication_date_in_filename_does_not_conflict() -> None:
+    """文件名里的发布日期不能顶掉标题里的财年。"""
+    guess = infer_earnings_call_fiscal(
+        filename="2024-02-01_Q4_2023.txt",
+        title="Q4 2023 Earnings Call",
+    )
+    _assert_guess(guess, year=2023, period="Q4", source="title")
+
+
+def test_nearest_year_wins_over_leftmost_year() -> None:
+    """跨公司引用时按距离取年份，不取最左年份。"""
+    guess = infer_earnings_call_fiscal(title="乙公司 2022；甲公司 Q4 2023 电话会")
+    _assert_guess(guess, year=2023, period="Q4", source="title")

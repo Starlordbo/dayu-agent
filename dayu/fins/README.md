@@ -462,8 +462,10 @@ python utils/retriage_active_6k_filings.py --base workspace --tickers ALC,ASM,NV
 电话会议纪要的财季判定真源是 `dayu/fins/upload_recognition.py` 的 `infer_earnings_call_fiscal`，只做纯文本推断，无 IO、无仓储依赖：
 
 - 声明来源优先级为开场声明 > 标题 > 文件名，与披露口径的接近程度一致。
-- 同一文本同时出现季度与全年时保留季度：一份“Q4 及全年”纪要只登记一份材料。
-- 判定前先剔除对比与展望语境（compared with / outlook / guidance / 展望 / 预期），历史年份与未来年份不参与当期归属。
+- 同一文本同时出现季度与全年时，以最先出现的声明为主口径：`Q4 and Full Year 2023` 取 Q4，`Full Year 2023 with Q4 details` 取 FY；两种情况都只登记一份材料。
+- 同一文本出现两个以上不同季度（如 `Q4 2023 and Q2 2024`）时判为冲突并要求确认，不静默取首个。
+- 判定前先剔除对比与展望分句（compared with / outlook / guidance / 与……相比 / 展望 / 预期），只删到当前分句结束；历史年份、未来年份与跨公司引用不参与当期归属。
+- 年份按离财季标记最近的年份取值，避免文件名里的发布日或前一个公司的年份被误绑。
 - 无声明、来源冲突或年份缺失时返回 `needs_confirmation=True`，由上传界面要求用户确认，下层不猜测。
 - fingerprint、去重、冲突保留与覆盖策略属于上传编排层，不在本函数内。
 
