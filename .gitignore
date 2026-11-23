@@ -24,3 +24,5 @@ htmlcov/
 .vscode/*
 .playwright-mcp/
 uv.lock
+# 本地模型缓存（Docling / HuggingFace），不入库
+.cache/
