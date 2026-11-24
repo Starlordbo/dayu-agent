@@ -566,7 +566,7 @@ _COMPARISON_DOCUMENT = "mat_google_cloud"
 _COMPARISON_QUESTION = "比较 GOOGL 与 AMZN 的云业务"
 _COMPARISON_ANSWER = "仅能据现有证据比较；AMZN 云业务数据尚未覆盖。"
 _COMPARISON_BASE_YEAR = 2026
-_COMPARISON_MAX_CALLS = 40
+_COMPARISON_MAX_CALLS = 60  # 2 次调用/轮 × interactive runtime.agent.max_iterations（30）
 
 
 class _ComparisonBudgetRunner:
