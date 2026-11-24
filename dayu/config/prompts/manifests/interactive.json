@@ -4,6 +4,7 @@
     "default_name": "mimo-v2.5-pro-thinking-plan",
     "allowed_names": [
       "openai-responses",
+      "gpt-6-astra",
       "mimo-v2.5-pro-thinking",
       "mimo-v2.5-pro-thinking-plan",
       "mimo-v2.5-pro-thinking-plan-sg",

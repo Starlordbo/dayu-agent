@@ -81,6 +81,21 @@ _EXPECTED_THINKING_ALLOWED_NAMES: list[str] = [
     "gemini-2.5-flash-thinking",
 ]
 
+_EXPECTED_INTERACTIVE_ALLOWED_NAMES: list[str] = [
+    "openai-responses",
+    "gpt-6-astra",
+    "mimo-v2.5-pro-thinking",
+    "mimo-v2.5-pro-thinking-plan",
+    "mimo-v2.5-pro-thinking-plan-sg",
+    "deepseek-v4-flash-thinking",
+    "deepseek-v4-pro-thinking",
+    "qwen-plus-thinking",
+    "ollama",
+    "gpt-5.4-thinking",
+    "claude-sonnet-4-6-thinking",
+    "gemini-2.5-flash-thinking",
+]
+
 _EXPECTED_CONVERSATION_COMPACTION_ALLOWED_NAMES: list[str] = [
     "openai-responses",
     "mimo-v2.5-pro-thinking",
@@ -114,7 +129,7 @@ _EXPECTED_WRITE_ALLOWED_NAMES: list[str] = [
 @pytest.mark.parametrize(
     ("scene_name", "expected_default", "expected_allowed_names"),
     [
-        ("interactive", "mimo-v2.5-pro-thinking-plan", _EXPECTED_THINKING_ALLOWED_NAMES),
+        ("interactive", "mimo-v2.5-pro-thinking-plan", _EXPECTED_INTERACTIVE_ALLOWED_NAMES),
         ("write", "mimo-v2.5-pro-plan", _EXPECTED_WRITE_ALLOWED_NAMES),
     ],
 )
@@ -662,14 +677,22 @@ def test_write_and_regenerate_prompts_require_separate_reader_facing_bullet_labe
 
 @pytest.mark.unit
 def test_load_scene_manifest_reads_interactive_manifest() -> None:
-    """验证 scene manifest 可按场景名读取。"""
+    """验证交互场景包含固定 Astra 选项且保持原默认模型。
+
+    Args:
+        无。
+    Returns:
+        无。
+    Raises:
+        AssertionError: 场景模型、会话或工具选择配置不符合约定时抛出。
+    """
 
     store = FilePromptAssetStore(ConfigFileResolver())
     manifest = store.load_scene_manifest("interactive")
 
     assert manifest["scene"] == "interactive"
     assert manifest["model"]["default_name"] == "mimo-v2.5-pro-thinking-plan"
-    assert manifest["model"]["allowed_names"] == _EXPECTED_THINKING_ALLOWED_NAMES
+    assert manifest["model"]["allowed_names"] == _EXPECTED_INTERACTIVE_ALLOWED_NAMES
     assert manifest["model"]["temperature_profile"] == "interactive"
     assert _require_conversation(manifest)["enabled"] is True
     assert _require_tool_selection(manifest)["mode"] == "select"

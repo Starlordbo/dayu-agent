@@ -229,6 +229,7 @@ CLI runner 已彻底禁用，不再允许通过 `llm_models.json` 配置或使�
 - `deepseek-v4-pro-thinking`
 - `gpt-5.4`
 - `gpt-5.4-thinking`
+- `gpt-6-astra`
 - `claude-sonnet-4-6`
 - `claude-sonnet-4-6-thinking`
 - `gemini-2.5-flash`
@@ -269,6 +270,8 @@ export DEEPSEEK_API_KEY="sk-xxxxxxxx"
 ```
 
 ### 4.5 想新增自定义模型
+
+内置 `gpt-6-astra` 条目用固定模型 id，只需设置 `OPENAI_API_KEY`，无需设置 `OPENAI_RESPONSES_MODEL`，已加入 `interactive` 场景的可选模型清单。
 
 新增一个模型，至少要同时考虑三层配置：
 

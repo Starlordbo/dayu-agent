@@ -1335,6 +1335,7 @@ dayu-render workspace/draft/AAPL/AAPL_qual_report.md report.html
 配置说明见 [dayu/config/README.md](dayu/config/README.md#可选-responses-模型)。配置好本机
 `OPENAI_API_KEY` 与 `OPENAI_RESPONSES_MODEL` 后，可显式选择 `openai-responses`；
 原有默认模型保持不变。
+内置 `gpt-6-astra` 条目用固定模型 id，只需设置 `OPENAI_API_KEY`，无需设置 `OPENAI_RESPONSES_MODEL`，可在交互式分析页直接选择。
 
 - 网页交互式分析提供模型选择和“新建会话”。已有会话选择“默认”会沿用已保存的模型。
   新会话 ID 保存在页面 URL 中，刷新同一 URL 可恢复；更换模型应新建会话。
