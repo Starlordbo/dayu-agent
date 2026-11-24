@@ -62,7 +62,7 @@ playwright install chromium
   - 同一行业里，不同公司写出公司自己的特殊结构变量。
 - 位于 Engine 的 web tools 现在的对抗challenge能力很弱，很多网站无法访问。
 - 位于 Fins 的 A 股 / 港股财报下载已接入主源，A 股使用巨潮，港股使用披露易。
-- 独立桌面 GUI 尚未实现；Web 提供 Streamlit 交互分析、财报管理、纪要上传与原文章节查看，以及 FastAPI 接口；报告页仍为占位。
+- 独立桌面 GUI 尚未实现；Web 提供 Streamlit 交互分析、财报管理、纪要上传、原文章节查看及后台报告生成，以及 FastAPI 接口。
 - WeChat UI 仅支持文本消息首版，还可添加更多好玩的功能。
 - 电话会议音频转录尚未实现；上传的文本纪要可按明确身份行区分分析师、管理层与主持人，未知身份不推断。
 - 财报presentation信息提取尚未实现。

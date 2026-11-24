@@ -27,7 +27,7 @@
   - 同一行业里，不同公司写出公司自己的特殊结构变量。
 - 位于 Engine 的 web tools 现在的对抗challenge能力很弱，很多网站无法访问。
 - **GUI 尚未实现**；
-- **Web UI 已支持自选股、财报下载和交互式分析，仍处于早期阶段**。
+- **Web UI 已支持自选股、财报下载、交互式分析与报告生成，仍处于早期阶段**。
 - **WeChat UI 仅支持文本消息首版，还可添加更多好玩的功能**。
 - 财报电话会议记录音频转录文字后信息提取（起码要区分信息来自提问还是回答）尚未实现。
 - 财报presentation信息提取尚未实现。
@@ -309,7 +309,7 @@ dayu-cli <subcommand> [参数]
 
 ### 2.2 Web 入口（Streamlit）
 
-基于 Streamlit 的 Web UI，可在浏览器中管理自选股、下载财报并进行按 ticker 绑定历史的交互式分析：
+基于 Streamlit 的 Web UI，可在浏览器中管理自选股、下载财报、进行按 ticker 绑定历史的交互式分析并生成报告：
 
 ```bash
 dayu-web
@@ -326,6 +326,10 @@ python -m dayu.web
 启动后，默认打开 Local URL: http://localhost:8501 （如果 8501 端口被占用将按尝试其他端口）
 
 在“会议纪要”页选中 MD/TXT/DOCX 后，页面从标题与开头正文预填材料标题、财年和财季，优先级为开场声明 > 标题 > 文件名。PDF 在选文件时不提取正文，仅按文件名预填，需人工核对；此阶段不支持 OCR。无法确定或存在冲突时须补全并确认，所有预填字段均可编辑覆盖，再点击“开始上传”。
+
+在“分析报告”页选择模板、可选模型覆盖及是否从已有进度继续（resume），点击“生成报告”。模板优先使用工作区 `assets/` 下的 Markdown 文件，也可选择内置默认模板；留空模型覆盖沿用场景配置。任务在后台执行，页面每 2 秒刷新运行状态，显示开始时间与已运行时长；同一公司已有任务时禁止重复启动。
+
+报告默认写入 `workspace/draft/<TICKER>/<TICKER>_qual_report.md`，完成后可直接阅读并下载 Markdown。刷新页面或换标签页会恢复磁盘记录；如果服务进程已经退出，页面提示“上次运行已中断，可重试”。失败原因与本次任务日志路径会显示在页面。本页不提供取消或 HTML/PDF 导出。
 
 功能说明：详见[dayu/web/README.md](dayu/web/README.md)
 
@@ -1346,6 +1350,6 @@ dayu-render workspace/draft/AAPL/AAPL_qual_report.md report.html
 - CLI 对话可用 `dayu-cli interactive --model-name openai-responses`。
 - CLI 报告通过 `--model-name openai-responses` 同时覆盖主写作与原有核查场景；显式
   `--audit-model-name` 仍可单独覆盖核查模型。不传模型参数时，各 scene 使用原默认值。
-- 网页报告页仍是占位页，其运行、进度、取消和产物接线属于尚未完成的报告页面工作。
+- 网页“分析报告”页的模型覆盖同时用于主写作与原有核查场景；可后台生成、查看状态及下载 Markdown，刷新不会再次触发生成。
 
 用量中的费用为估算，缺价格或失败请求的用量未知时会明确标记不完整，不是实际账单。

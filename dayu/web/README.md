@@ -29,7 +29,9 @@
 - `pages/main_page.py`：主功能区入口，组合四大 Tab（财报管理、交互式分析、分析报告、会议纪要）。
 - `pages/filing_tab.py`：财报下载与处理页面。
 - `pages/chat_tab.py`：交互式分析页面编排（渲染、输入、历史加载、清空会话、流式轮询）。
-- `pages/report_tab.py`：分析报告页面。
+- `pages/report_tab.py`：分析报告表单、独立片段轮询与 Markdown 阅读下载。
+- `report_runtime.py`：通过写作服务协议在后台线程执行，以文件锁保护启动与状态变更。
+- `report_runs.py`：报告任务磁盘快照的严格解析与原子读写。
 
 
 ## 3. 开发约束与测试锚点
@@ -71,10 +73,21 @@ Streamlit 交互页只展示已配置且在 interactive 场景允许名单内的
 模型选择经线程 worker 的 `ExecutionOptions` 传给 ChatService；服务端 session
 元数据是续聊模型的真源，页面默认值不会覆盖它。“新建会话”将独立 ID 写入 URL，
 刷新可恢复同一会话；旧会话历史不会被删除。生成中禁用新建动作。
-报告页仍为占位实现，不会因页面刷新触发报告或模型请求。
+报告页沿用入口提供的模型清单；空选择保留各场景默认，显式选择由 WriteService 同时覆盖主写作与原有核查场景。页面刷新只读取状态，不触发写作。
 
 `ChatTurnSubmission` 显式提供 `effective_model_name` 和 `first_chunk_timeout_seconds`。
 worker 在消费事件流前将提交信息投递给 UI；UI 使用该阈值及实际模型生成首输出超时提示，
 不从页面可空模型选择推断。首输出计时仍从 worker 启动开始，正文或推理的非空增量均视为首输出。
 配置入口见[聊天首输出等待](../config/README.md#聊天首输出等待chat_stream_config)。
 超时不会确认 Host run 的取消或终态。
+
+### 报告执行与恢复
+
+- 页面只向 `WriteServiceProtocol.run(WriteRequest)` 提交请求，后台线程不访问 Streamlit 上下文；Host 仍负责业务运行的生命周期与并发治理。
+- 运行事实保存在 `workspace/.dayu/streamlit/report_runs/<TICKER>.json`，字段为 `state`、`pid`、`started_at`、`updated_at`、`output_dir`、`error`、`log_path`。不放入聊天状态、`st.session_state` 或进程内任务字典。
+- JSON 通过同目录临时文件及 `os.replace` 原子发布。固定的 `<TICKER>.lock` 文件使用项目跨平台文件锁，串行化“检查已有任务、写 running、启动线程”；UI 竞争失败立即返回提示，不阻塞等待。锁文件保留，避免删除后产生不同 inode 的锁竞争漏洞。
+- 读取 `running` 时通过进程判活接口校验 pid（POSIX 为 `os.kill(pid, 0)`）；进程消失则在锁内重新读取并落 `stale`。失败写入明确 `error`，线程启动失败同样落 `failed`，随后允许重试。
+- `st.fragment(run_every=2.0)` 包含报告表单与状态，终态片段可自行恢复按钮及展示输出目录中的报告，不依赖聊天队列或其片段。阶段不可获得时显示“运行中”。
+- 每次任务有独立日志，记录启动、终态和错误；不重定向进程共享 stdout/stderr，也不承诺流水线逐阶段日志。损坏状态显式报错，不静默覆盖。
+- 空白联网 provider 在 WriteService 内从已解析执行配置补齐，使网页与 CLI 的断点续写签名保持同源。报告状态是新增文件格式，没有旧报告状态库或兼容读取路径。
+- 后台线程随服务进程退出；重启后恢复的是任务状态，不会自动重启写作。当前仅有 pid 判活，不能区分 pid 被操作系统复用的情况。状态文件写入失败会记录服务端错误日志；磁盘不可写时无法保证终态持久化。

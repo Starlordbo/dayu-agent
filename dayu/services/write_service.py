@@ -13,7 +13,8 @@ from dayu.contracts.host_execution import (
     HostedRunSpec,
 )
 from dayu.contracts.session import SessionSource
-from dayu.execution.options import ExecutionOptions
+from dayu.contracts.tool_configs import WebToolsConfig
+from dayu.execution.options import ExecutionOptions, resolve_web_tools_config_from_toolset_configs
 from dayu.host.protocols import HostedExecutionGatewayProtocol, HostGovernanceProtocol
 from dayu.process_lifecycle import RunLifecycleObserver
 from dayu.services.concurrency_lanes import resolve_hosted_run_concurrency_lane
@@ -127,7 +128,20 @@ class WriteService(WriteServiceProtocol):
         host_session_id: str,
         cancellation_token: CancellationToken | None = None,
     ) -> int:
-        """执行写作流水线主体。"""
+        """解析实际模型与联网配置后执行写作流水线主体。
+
+        Args:
+            request: 写作执行请求；空白联网 provider 表示沿用已解析执行配置。
+            host_session_id: 当前写作流水线复用的 Host Session 标识。
+            cancellation_token: Host 提供的协作式取消信号；为空时不额外注入信号。
+
+        Returns:
+            写作流水线退出码。
+
+        Raises:
+            ValueError: 执行选项或场景配置非法时抛出。
+            RuntimeError: 写作流水线主体抛出的运行时异常会继续向上传播。
+        """
 
         main_execution_options = build_execution_options_with_model_override(
             execution_options=request.execution_options,
@@ -146,7 +160,15 @@ class WriteService(WriteServiceProtocol):
             main_execution_options=main_execution_options,
             audit_execution_options=audit_execution_options,
         )
-        write_config = replace(request.write_config, scene_models=scene_models)
+        web_provider = request.write_config.web_provider
+        if not web_provider.strip():
+            web_tools_config = (
+                resolve_web_tools_config_from_toolset_configs(resolved_options.toolset_configs)
+                or WebToolsConfig()
+            )
+            # 恢复签名与实际联网配置保持同源，避免空值请求因入口差异失去已有进度。
+            web_provider = web_tools_config.provider
+        write_config = replace(request.write_config, scene_models=scene_models, web_provider=web_provider)
 
         return run_write_pipeline(
             workspace=self.workspace,
@@ -192,4 +214,3 @@ def _resolve_write_scene_models(
 
 
 __all__ = ["WRITE_CANCELLED_EXIT_CODE", "WriteRunConfig", "WriteService"]
-

@@ -133,8 +133,11 @@ pip install -r requirements.txt
 - `tests/application/test_cancellation_bridge.py` 与 `tests/engine/test_async_openai_runner_utils.py` 这类并发/超时测试，不得把 0.08s、0.2s 这类固定 sleep 当成必然成立的完成信号；应使用带超时的轮询等待来守住语义，避免 CI runner 时序抖动造成伪失败。
 - `tests/fins/test_storage_batch_recovery.py` 这类跨进程锁测试同样不得把 5 秒级硬编码收口时间当成必然成立的环境保证；应使用具名超时常量和轮询等待，让较慢的 Windows runner 仍能验证同一套锁语义，而不是把时序抖动误报成存储回归。
 - `test_web_routes.py` 还要守住 Web 的客户端错误语义：像 `PromptService.submit()`、`ChatService.resume_pending_turn()` 这类已经在 Service 边界同步抛出的 `ValueError/KeyError`，router 必须映射成对应 `4xx`，且 `/api/chat/resume` 只能在 resume 成功后才创建后台消费任务，不能漏成 `500` 或先受理后失败。
-- `test_web_routes.py` 还要守住 `/api/write` 的未支持语义：当 Web 当前不支持在线写作时，route 必须显式返回 `501`，不能再用 `202` / `accepted=true` 伪装成已受理。
+- `test_web_routes.py` 还要守住 `/api/write` 的未支持语义：FastAPI 写作路由当前必须显式返回 `501`，不能用 `202` / `accepted=true` 伪装成已受理；Streamlit 报告页通过独立的 Service 调用路径执行。
 - `test_streamlit_watchlist.py` 负责守住 Streamlit 自选股组件的本地持久化与表格合并边界：`workspace/.dayu/streamlit/watchlist.json` 读写、删除/编辑/新增合并、必填校验与 ticker 去重语义不能漂移。
+- `test_streamlit_report_runs.py` 与 `test_streamlit_report_runtime.py` 守住报告磁盘真源：严格 JSON 校验、原子替换、ticker 隔离、pid 失联恢复、并发排他启动、线程及服务失败收尾；全部使用受控假 WriteService。
+- `test_streamlit_report_tab.py` 用真实 AppTest 验证模板/模型/resume、运行态、失败重试、全新会话恢复、报告正文及 Markdown 下载。`test_streamlit_report_fragment.py` 在同一 runner 内投递真实自动片段请求，验证 2 秒轮询消息、磁盘终态与控件恢复，不把整页重跑当作片段刷新。
+- `test_write_service.py` 的 provider 继承测试只检查传入假流水线的配置，守住空白值从已解析选项补齐、显式值保留及 resume 不丢失；禁止为报告页面验收运行真实写作流水线。
 - `test_streamlit_chat_utils.py` 负责守住 `chat/utils.py` 的 session/trace 标识生成、流式文本提取与 Markdown 归一，以及事件折叠保留副作用消息等纯函数语义。
 - `test_streamlit_chat_stream_runtime.py` 负责守住 `chat/stream_runtime.py` 的首 chunk 超时、chunk 间超时、本次提交取消信号、worker 退出后 trailing event 消费与 error 事件收口语义；超时不得立即标记完成，取消文案必须等待 Host 流收尾。
 - `test_chat_stream_config.py` 覆盖首输出阈值默认 90 秒、runner 覆盖和非法配置；`test_model_picker.py` 验证 Service 提交返回实际模型与阈值、省略模型选择时恢复会话绑定，以及真实 AppTest 页面经 Service / Host / Agent 到延迟假 Runner 的超时文案、阈值附近耗时、快路径和放宽阈值后的完成行为。延迟假 Runner 接收真实 Host 令牌，保留原超时耗时边界，并验证取消确认文案。

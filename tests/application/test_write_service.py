@@ -28,6 +28,7 @@ from dayu.services.scene_execution_acceptance import SceneExecutionAcceptancePre
 from dayu.services.write_service import WRITE_CANCELLED_EXIT_CODE, WriteService
 from dayu.services.protocols import WriteServiceProtocol
 from dayu.startup.workspace import WorkspaceResources
+from tests.application.conftest import StubHostExecutor, StubSessionRegistry
 
 
 class _FakeCompanyMetaProvider:
@@ -340,6 +341,81 @@ def test_write_service_runs_pipeline_via_host_executor(monkeypatch: pytest.Monke
     assert host_executor.last_spec.metadata == {}
 
     assert isinstance(service, WriteServiceProtocol)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("requested_provider", "configured_provider", "expected_provider"),
+    [
+        ("", "auto", "auto"),
+        (" \t\n", "auto", "auto"),
+        ("", "tavily", "tavily"),
+        (" \t\n", "tavily", "tavily"),
+        ("off", "tavily", "off"),
+        ("serper", "auto", "serper"),
+        ("", None, "auto"),
+    ],
+)
+def test_write_service_resolves_inherited_web_provider_before_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    requested_provider: str,
+    configured_provider: str | None,
+    expected_provider: str,
+) -> None:
+    """写作服务应把实际联网配置传入流水线，使恢复签名与入口无关。
+
+    Args:
+        monkeypatch: 用于替换执行选项解析器和写作流水线的测试工具。
+        tmp_path: 隔离的测试工作目录。
+        requested_provider: 请求显式指定的 provider，空白表示沿用执行配置。
+        configured_provider: 已解析执行配置的 provider；空值表示缺少联网快照。
+        expected_provider: 传入流水线并参与恢复签名的预期 provider。
+
+    Returns:
+        无。
+
+    Raises:
+        AssertionError: 流水线参数不符合继承或显式覆盖语义时抛出。
+    """
+
+    workspace = _build_workspace(tmp_path)
+    host = Host(
+        executor=StubHostExecutor(),
+        session_registry=StubSessionRegistry(),
+        run_registry=_run_registry(),
+    )
+    preparer = _FakeSceneExecutionAcceptancePreparer(workspace_dir=tmp_path)
+    resolved_options = build_base_execution_options(
+        workspace_dir=tmp_path,
+        run_config={"web_tools_config": {"provider": configured_provider or expected_provider}},
+    )
+    if configured_provider is None:
+        resolved_options = replace(resolved_options, toolset_configs=())
+    monkeypatch.setattr(preparer, "resolve_execution_options", Mock(return_value=resolved_options))
+    pipeline = Mock(return_value=0)
+    monkeypatch.setattr("dayu.services.write_service.run_write_pipeline", pipeline)
+    service = WriteService(
+        host=host,
+        host_governance=host,
+        workspace=workspace,
+        scene_execution_acceptance_preparer=preparer,
+    )
+    original_request = _build_request()
+    request = replace(
+        original_request,
+        write_config=replace(original_request.write_config, web_provider=requested_provider, resume=True),
+    )
+
+    assert service.run(request) == 0
+
+    pipeline.assert_called_once()
+    routed_config = pipeline.call_args.kwargs["write_config"]
+    assert isinstance(routed_config, WriteRunConfig)
+    assert routed_config.web_provider == expected_provider
+    assert routed_config.resume is True
+    assert pipeline.call_args.kwargs["resolved_options"] is resolved_options
+    assert request.write_config.web_provider == requested_provider
 
 
 @pytest.mark.unit

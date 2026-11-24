@@ -70,7 +70,7 @@ def render_stock_detail_page(
         fins_service: 财报服务协议实例。
         chat_service: 聊天服务协议实例。
         write_service: 写作服务协议实例。
-        model_names: 可选择的对话模型名称。
+        model_names: 可选择的对话及报告模型名称。
 
     返回值:
         无。
@@ -108,6 +108,7 @@ def render_stock_detail_page(
             selected_stock=selected_stock,
             workspace_root=workspace_root,
             write_service=write_service,
+            model_names=model_names,
         )
 
     with tabs[3]:
