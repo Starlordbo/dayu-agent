@@ -130,6 +130,7 @@ dayu/config/
 
 - `manifests/*.json`：定义某个 scene 的装配方式、对话模式、工具选择和 fragment 列表。
 - `scenes/*.md`：定义该 scene 的执行契约，只回答“这一类任务怎么执行”。
+- `scenes/interactive.md`：交互式比较先逐公司获取文档并保持归属对应；财务数字优先用结构化工具取多期，全文搜索用于定性或原文定位。单家公司自由检索建议约 8 次，达到后先作答并披露未覆盖点；这是 prompt guidance，不是新增运行时硬上限，效果需真实模型实测。
 - `tasks/*.md`：定义某个具体任务要输入什么、输出什么。
 - `wechat` scene：服务微信通道的多轮交互，工具集合与 `interactive` 相同，但输出约束更窄，要求回复为适合微信下发的纯文本；其多轮行为由 manifest 的 `conversation.enabled=true` 显式声明。
 - 对 `conversation.enabled=true` 的 scene，Service 当前会默认把 `host_policy.resumable=True` 写入 `ExecutionContract`；Host 仍会继续做硬门槛校验，只有稳定 `session_key` 存在时才允许进入 V1 恢复路径。

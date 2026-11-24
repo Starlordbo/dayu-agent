@@ -2,18 +2,35 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 import threading
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from pathlib import Path
 from queue import Queue
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from streamlit.testing.v1 import AppTest
+from streamlit.testing.v1.element_tree import Block
 
 from dayu.contracts.events import AppEvent, AppEventType
+from dayu.contracts.agent_types import AgentMessage, JsonValue
+from dayu.contracts.protocols import ToolExecutor
+from dayu.engine.async_agent import AgentRunningConfig, AsyncAgent
+from dayu.engine.events import (
+    EventType, StreamEvent, content_complete, content_delta, done_event,
+    tool_call_dispatched, tool_call_result, tool_calls_batch_done,
+)
+from dayu.engine.processors.processor_registry import ProcessorRegistry
+from dayu.engine.tool_registry import ToolRegistry
+from dayu.fins.domain.document_models import CompanyMeta, SourceDocumentUpsertRequest
+from dayu.fins.domain.enums import SourceKind
+from dayu.fins.tools.fins_tools import register_fins_read_tools
+from dayu.fins.tools.service import FinsToolService
+from dayu.host.events import build_app_event_from_stream_event
 from dayu.host.protocols import (
     ConversationClearPartiallyAppliedError,
     ConversationClearRejectedError,
@@ -28,8 +45,12 @@ from dayu.web.streamlit.pages.chat.stream_runtime import (
     StreamQueueItem,
     new_stream_frame_state,
 )
-from dayu.web.streamlit.pages.chat.utils import build_chat_session_id
+from dayu.web.streamlit.pages.chat.utils import build_chat_session_id, fold_app_events_to_assistant_text
 from dayu.web.streamlit.pages.chat_tab import ChatMessage
+from dayu.prompting.scene_definition import load_scene_definition
+from dayu.startup.config_file_resolver import ConfigFileResolver
+from dayu.startup.prompt_assets import FilePromptAssetStore
+from tests.fins.storage_testkit import build_fs_storage_test_context
 
 _TICKER = "AAPL"
 _SESSION = "session-keep"
@@ -538,6 +559,194 @@ def test_successful_answer_preserves_side_messages_after_rerun(monkeypatch: pyte
     assert any("部分材料不可用" in item.value for item in app.warning)
     assert any("内容过滤" in item.value for item in app.info)
     assert app.text_area[0].value == ""
+
+
+_COMPARISON_TICKERS = ("GOOGL", "AMZN")
+_COMPARISON_DOCUMENT = "mat_google_cloud"
+_COMPARISON_QUESTION = "比较 GOOGL 与 AMZN 的云业务"
+_COMPARISON_ANSWER = "仅能据现有证据比较；AMZN 云业务数据尚未覆盖。"
+_COMPARISON_BASE_YEAR = 2026
+_COMPARISON_MAX_CALLS = 40
+
+
+class _ComparisonBudgetRunner:
+    """离线双公司调用脚本，执行真实工具并让真实 Agent 终止迭代。"""
+
+    def __init__(self) -> None:
+        """初始化调用记录。
+
+        参数:
+            无。
+        返回值:
+            无。
+        异常:
+            无。
+        """
+        self.executor: ToolExecutor | None = None
+        self.model_calls = 0
+        self.tool_results: list[StreamEvent] = []
+
+    def set_tools(self, executor: ToolExecutor | None) -> None:
+        """接收 Agent 管理的工具开关。
+
+        参数:
+            executor: 工具执行器，降级时为空。
+        返回值:
+            无。
+        异常:
+            无。
+        """
+        self.executor = executor
+
+    def is_supports_tool_calling(self) -> bool:
+        """声明脚本使用工具事件协议。
+
+        参数:
+            无。
+        返回值:
+            True。
+        异常:
+            无。
+        """
+        return True
+
+    async def close(self) -> None:
+        """释放无外部资源的离线 Runner。
+
+        参数:
+            无。
+        返回值:
+            无。
+        异常:
+            无。
+        """
+
+    async def call(
+        self, messages: list[AgentMessage], *, stream: bool = True, **extra_payloads: JsonValue,
+    ) -> AsyncIterator[StreamEvent]:
+        """每轮调用两个工具，故意混用一次 ID，直到 Agent 关闭工具。
+
+        参数:
+            messages: Agent 上下文。
+            stream: 流式输出标记。
+            extra_payloads: Runner 协议附带的调用上下文。
+        返回值:
+            真实工具结果事件；降级后只返回答案。
+        异常:
+            AssertionError: Agent 未在测试预算内停止工具调用。
+        """
+        del messages, stream, extra_payloads
+        self.model_calls += 1
+        if self.executor is None:
+            yield content_delta(_COMPARISON_ANSWER)
+            yield done_event()
+            return
+        assert len(self.tool_results) < _COMPARISON_MAX_CALLS
+        yield content_complete("")
+        call_ids: list[str] = []
+        errors = 0
+        for index, ticker in enumerate(_COMPARISON_TICKERS):
+            name = "list_documents"
+            arguments: dict[str, JsonValue] = {"ticker": ticker}
+            if self.model_calls > 1:
+                # 按期变化的查询避免重复调用防线抢先触发，单独锁定轮次预算。
+                arguments["fiscal_years"] = [_COMPARISON_BASE_YEAR - self.model_calls]
+            if self.model_calls == 2 and ticker == _COMPARISON_TICKERS[1]:
+                name = "search_document"
+                arguments = {"ticker": ticker, "document_id": _COMPARISON_DOCUMENT, "query": "cloud"}
+            call_id = f"comparison_{self.model_calls}_{index}"
+            call_ids.append(call_id)
+            yield tool_call_dispatched(call_id, name, arguments, index_in_iteration=index)
+            result = self.executor.execute(name, arguments)
+            errors += int(result["ok"] is False)
+            event = tool_call_result(call_id, result, name=name, arguments=arguments, index_in_iteration=index)
+            self.tool_results.append(event)
+            yield event
+        yield tool_calls_batch_done(call_ids, ok=len(call_ids) - errors, error=errors, timeout=0, cancelled=0)
+        yield done_event()
+
+
+async def _run_comparison_budget(registry: ToolRegistry, runner: _ComparisonBudgetRunner) -> list[StreamEvent]:
+    """使用包内交互预算驱动生产 Agent，不调用在线模型。
+
+    参数:
+        registry: 真实财报工具注册表。
+        runner: 离线比较脚本。
+    返回值:
+        完整 Agent 事件。
+    异常:
+        AssertionError: 包内交互预算未声明。
+    """
+    definition = load_scene_definition(FilePromptAssetStore(ConfigFileResolver()), "interactive")
+    max_iterations = definition.runtime.agent.max_iterations
+    assert max_iterations is not None
+    agent = AsyncAgent(runner, tool_executor=registry, running_config=AgentRunningConfig(
+        max_iterations=max_iterations, max_compactions=0, fallback_mode="force_answer",
+    ))
+    return [event async for event in agent.run(_COMPARISON_QUESTION)]
+
+
+def test_cross_company_budget_warning_survives_terminal_redraw(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """混用 ID 必须显式报错，双调用批次须有界，实际降级告警须留在终态对话区。
+
+    参数:
+        tmp_path: 隔离财报仓储。
+        monkeypatch: 隔离聊天运行时队列。
+    返回值:
+        无。
+    异常:
+        AssertionError: 归属错误静默、预算失守或终态重绘丢失告警。
+    """
+    storage = build_fs_storage_test_context(tmp_path)
+    for ticker in _COMPARISON_TICKERS:
+        storage.company_repository.upsert_company_meta(CompanyMeta(
+            company_id=ticker, company_name=ticker, ticker=ticker, market="US",
+            resolver_version="test", updated_at="2026-11-24T00:00:00Z",
+        ))
+    storage.source_repository.create_source_document(SourceDocumentUpsertRequest(
+        ticker=_COMPARISON_TICKERS[0], document_id=_COMPARISON_DOCUMENT,
+        internal_document_id=_COMPARISON_DOCUMENT,
+    ), SourceKind.MATERIAL)
+    registry = ToolRegistry()
+    register_fins_read_tools(registry, service=FinsToolService(
+        company_repository=storage.company_repository, source_repository=storage.source_repository,
+        processed_repository=storage.processed_repository, processor_registry=ProcessorRegistry(),
+    ))
+    runner = _ComparisonBudgetRunner()
+    events = asyncio.run(_run_comparison_budget(registry, runner))
+    errors = [event.data["result"] for event in runner.tool_results if event.data["result"]["ok"] is False]
+    assert len(errors) == 1
+    assert errors[0]["error"] == "invalid_argument"
+    assert "GOOGL" in errors[0]["message"] and "AMZN" in errors[0]["message"]
+    assert "list_documents" in errors[0]["hint"]
+    assert len(runner.tool_results) == _COMPARISON_MAX_CALLS
+    assert runner.model_calls == _COMPARISON_MAX_CALLS // len(_COMPARISON_TICKERS) + 1
+    assert events[-1].type == EventType.FINAL_ANSWER and events[-1].data["degraded"] is True
+    app_events = [app_event for event in events
+                  if (app_event := build_app_event_from_stream_event(event)) is not None]
+    answer, side_messages, filtered = fold_app_events_to_assistant_text(app_events)
+    budget_warnings = [message for message in side_messages if "最大工具调用" in message]
+    assert len(budget_warnings) == 1 and "现有上下文" in budget_warnings[0]
+    assert answer == _COMPARISON_ANSWER and filtered is False
+    service = _ChatService(histories={_SESSION: [_turn(user=_COMPARISON_QUESTION, answer=answer)]})
+    app = _app(service)
+    queue = _install_queue(app, monkeypatch)
+    queue.put(StreamQueueItem(done=False, chunk=answer))
+    for message in side_messages:
+        queue.put(StreamQueueItem(done=False, event_type="side_message", chunk=message))
+    queue.put(StreamQueueItem(done=True, event_type="done"))
+    app.run()
+    app.run()
+    assert not app.exception and not app.error
+    assert len(app.chat_message) == 2
+    # 生产布局把终态反馈放在历史对话容器内、消息气泡之后。
+    history_blocks = [node for node in app.main.children.values()
+                      if isinstance(node, Block) and len(node.chat_message) == 2]
+    assert len(history_blocks) == 1
+    # Streamlit 将前导警告 emoji 拆为 icon，重组后严格比较完整消息。
+    assert [f"{item.proto.icon} {item.value}" for item in history_blocks[0].warning] == budget_warnings
 
 
 def test_submit_uses_real_worker_and_service_events_without_model() -> None:

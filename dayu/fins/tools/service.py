@@ -120,6 +120,43 @@ _MISSING_TICKER_HINT = (
     "目标：先确认这家公司是否已被当前财报工具收录。允许动作：切到公司或网页来源确认公司标识。"
     "不允许：继续穷举 ticker 变体。下一步：先确认公司标识，再回到财报工具。"
 )
+_DOCUMENT_SOURCE_KINDS = (SourceKind.FILING, SourceKind.MATERIAL)
+_HIDDEN_COMPANY_DIRECTORY_STATUS = "hidden_directory"
+
+
+def _find_other_document_owners(
+    *,
+    ticker: str,
+    document_id: str,
+    company_repository: CompanyMetaRepositoryProtocol,
+    source_repository: SourceDocumentRepositoryProtocol,
+) -> list[str]:
+    """在当前公司查无源文档后，通过仓储核实其他公司的同名文档。
+
+    参数:
+        ticker: 当前规范公司标识。
+        document_id: 待核实的规范文档标识。
+        company_repository: 提供公司目录盘点的仓储。
+        source_repository: 提供源文档存在性证据的仓储。
+    返回值:
+        确实存在该文档的其他公司标识，去重并排序；不假设 ID 全局唯一。
+    异常:
+        OSError: 仓储盘点或读取失败。
+        ValueError: 仓储标识非法。
+    """
+    owners: set[str] = set()
+    for entry in company_repository.scan_company_meta_inventory():
+        if entry.status == _HIDDEN_COMPANY_DIRECTORY_STATUS or entry.directory_name == ticker:
+            continue
+        # 公司 meta 缺失不代表源文档不存在；归属证据来自源文档仓储句柄。
+        for source_kind in _DOCUMENT_SOURCE_KINDS:
+            try:
+                handle = source_repository.get_source_handle(entry.directory_name, document_id, source_kind)
+            except FileNotFoundError:
+                continue
+            owners.add(handle.ticker)
+            break
+    return sorted(owners)
 
 
 class FinsToolService:
@@ -1796,6 +1833,7 @@ class FinsToolService:
 
         Raises:
             FileNotFoundError: 文档不存在时抛出。
+            ToolBusinessError: 文档仅属于其他公司时抛出。
             ValueError: 未匹配处理器时抛出。
         """
 
@@ -1830,6 +1868,7 @@ class FinsToolService:
 
         Raises:
             FileNotFoundError: 文档不存在时抛出。
+            ToolBusinessError: 文档仅属于其他公司时抛出。
             ValueError: 未匹配处理器时抛出。
             RuntimeError: 候选处理器全部创建失败时抛出。
         """
@@ -1860,18 +1899,29 @@ class FinsToolService:
 
         Raises:
             FileNotFoundError: 当文档既不在 filing 也不在 material 中时抛出。
+            ToolBusinessError: 文档存在于其他公司时抛出，并指明归属与恢复动作。
+            OSError: 仓储盘点或读取失败时抛出。
         """
 
-        try:
-            self._source_repository.get_source_handle(ticker, document_id, SourceKind.FILING)
-            return SourceKind.FILING
-        except FileNotFoundError:
-            pass
-        try:
-            self._source_repository.get_source_handle(ticker, document_id, SourceKind.MATERIAL)
-            return SourceKind.MATERIAL
-        except FileNotFoundError:
-            pass
+        for source_kind in _DOCUMENT_SOURCE_KINDS:
+            try:
+                self._source_repository.get_source_handle(ticker, document_id, source_kind)
+                return source_kind
+            except FileNotFoundError:
+                continue
+        # 仅缺失路径付出跨公司诊断成本；正常读取及 processor 缓存路径不扫描其他公司。
+        owners = _find_other_document_owners(
+            ticker=ticker,
+            document_id=document_id,
+            company_repository=self._company_repository,
+            source_repository=self._source_repository,
+        )
+        if owners:
+            raise ToolBusinessError(
+                code=ErrorCode.INVALID_ARGUMENT,
+                message=f"document_id `{document_id}` 属于 {', '.join(owners)}，当前 ticker={ticker}",
+                hint=f"请先调用 list_documents(ticker=\"{ticker}\") 获取 {ticker} 的文档，再使用对应的 document_id。",
+            )
         raise FileNotFoundError(f"Document not found: ticker={ticker}, document_id={document_id}")
 
     def _get_creation_lock(self, cache_key: ProcessorCacheKey) -> Lock:

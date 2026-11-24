@@ -20,6 +20,7 @@
   - `tests/engine/test_web_playwright_backend.py` 负责守住 `dayu.engine.tools.web_playwright_backend` 的真源边界，包括浏览器单例、子进程 worker、资源路由与关闭/终止收口
 - `tests/fins/`
   - Fins direct operation、窄仓储、processor、tool service 测试
+  - `test_cross_company_document_identity.py` 通过真实窄仓储锁定跨公司 ID 归属错误与真正缺失的区别，覆盖 filing/material、公司 meta 缺失、多个归属、当前公司同名 ID 优先，以及所有文档读取工具的错误信封。
   - `tests/integration/fins/test_fins_tools_ground_truth.py` 依赖仓库内 `workspace/` 的真实 source 文档样本与 `tests/fixtures/fins/ground_truth/` 基线；当 CI 或干净环境里缺少这批本地样本时，应显式 `skip`，不能把“样本未准备”误报成产品回归
   - `tests/fins/test_sec_pipeline_helpers.py` 与 `tests/fins/test_sec_rebuild_workflow.py` 共同守住 source fiscal 真源边界：download/source 层禁止从 `report_date`/`filing_date` 硬猜 fiscal 字段，尤其是 6-K / 6-K/A 不得猜 `fiscal_year/fiscal_period`，rebuild 在新推断为空时也不得继续沿用 previous_meta 中的旧猜测值
   - `tests/fins/test_cninfo_downloader.py` 负责守住巨潮 discovery 的网络隔离与候选去重边界：测试必须通过 `httpx.MockTransport` 注入全市场 `szse_stock.json` 与 `hisAnnouncement/query` fixture，不访问真实巨潮；公司解析 fixture 必须覆盖深市、沪市与全文搜索噪声不影响精确 ticker 解析；候选 fixture 必须覆盖 `secCode` 与 `adjunctType=PDF` 过滤，并守住摘要、英文版/`（英文）`/英文简版、港股公告、关于财报正本的公告类材料不会进入正本候选；报告去重键必须是 `(fiscal_year, fiscal_period)`，同一年同 period 才按更正版优先、披露日期最新选择，不能把不同 fiscal_year 的年报互相吞掉
@@ -566,6 +567,7 @@ DAYU_RUN_LIVE_API=1 EDGAR_LOCAL_DATA_DIR="$PWD/workspace/tmp/edgar" \
 - `tests/application/test_streamlit_citations.py`：历史/流式/终态统一格式化，完整合法机器定位、分块输出、URL注入与代码块隔离。
 - `tests/application/test_streamlit_chat_render.py`：真实聊天 AppTest 控件及逐帧事件接线，检查用户文本不替换、历史/流式/终态来源均正确，保持会话参数；离线类型化 Service 不调用模型。
   终态回归还覆盖错误、空回复、警告和内容过滤提示在整页重绘后保留，失败保留输入供重试，后续提交、清空及新建会话清理旧反馈，并防止跨会话误展示。
+  跨公司比较回归使用离线 Runner、真实 Agent 和财报工具，故意混用一次 GOOGL/AMZN 文档 ID；每轮固定两个调用，在交互场景 20 轮预算下锁定 40 次工具调用后降级，并经 Host 事件转换、UI 折叠和生产队列验证完整告警留在终态历史容器。该上界只适用于受控批次，不能推断任意模型行为都至多 40 次；AppTest 也不代替真实浏览器验收。`tests/engine/test_prompt_assets.py` 另行锁定加载的比较检索纪律文本，不据文本测试宣称调用量或 token 已下降。
 - `tests/application/test_streamlit_chat_fragment.py`：在同一 AppTest runner 内投递真实自动 fragment 请求，验证 loading 整页 → 终态片段 → 整页重绘，直接断言片段外按钮恢复和终态反馈保留。仅扩展 Streamlit testing 的请求入口，不替代生产 fragment 或 rerun；升级 Streamlit 时需复核这个内部测试入口，不将普通整页 `app.run()` 等同于片段刷新。
 - `tests/application/test_material_tab_render.py` 与 `test_streamlit_source_viewer.py`：无头 AppTest 验证逐文件失败/重试、编辑/去重、持久目录、来源定位/连续目录选择/刷新和角色证据。只替代浏览器上传控件，不将 AppTest 声称为真实浏览器验收。
 - `tests/application/test_streamlit_source_routing.py`：执行真实 `main()`，守住来源先于侧栏路由、缺失依赖提示、启动准备与服务缓存边界；串联 MSFT 对话引用 AAPL → 实际查看器返回 URL → 全新 AppTest 的真实侧栏/主页面/聊天，验证无可选模型时仍恢复非默认原会话，不产生提交。

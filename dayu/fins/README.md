@@ -160,6 +160,7 @@ Fins 当前通过两个 toolset registrar 向 Agent 路径注入工具：
 - 财报读取 toolset 的限制配置由 registrar 自己从 `context.toolset_config.payload` 反解，不再由 Host 传专用 `fins_tool_limits`
 - registrar 反解 `context.toolset_config.payload` 中的数值限制时，必须走 `dayu.contracts.toolset_config` 的统一 coercion helper，不能直接对 `ToolsetConfigValue` 做裸 `int()`
 - 财报读取工具只接受预构建 `FinsToolService`
+- 所有带 `document_id` 的读取工具共用源文档归属校验。当前公司找不到该 ID 时，服务通过公司盘点仓储与源文档句柄核实其他公司的归属；确有其他归属则返回 `invalid_argument`，列出公司及当前 ticker，并提示重新 `list_documents`。真正缺失仍保留 `FileNotFoundError` / 工具层 `file_not_found`，不自动切换公司。ID 不要求全局唯一，当前公司也存在同名 ID 时仍正常读取；跨公司盘点只发生在当前公司缺失路径，不创建其他公司的处理器。
 - ingestion 工具只接受 `service_factory + manager_key`；下载 job 工具按 ticker 归一化后的市场路由到同一 ingestion service factory，当前支持美股、A 股、港股，A 股/港股表单过滤使用 `FY/H1/Q1/Q2/Q3/Q4`
 - `Host` 不再从 `FinsRuntime` 拉总仓储对象，也不再持有 Agent 工具注入所需的 Fins runtime
 

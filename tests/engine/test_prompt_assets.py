@@ -14,6 +14,33 @@ from dayu.startup.config_file_resolver import ConfigFileResolver
 from dayu.startup.prompt_assets import FilePromptAssetStore
 
 
+def test_interactive_comparison_retrieval_guidance_is_loaded() -> None:
+    """锁定交互场景加载的比较检索纪律，不把文本存在当成模型效果。
+
+    参数:
+        无。
+    返回值:
+        无。
+    异常:
+        AssertionError: 场景未加载纪律、结构化多期策略或预算建议。
+    """
+    store = FilePromptAssetStore(ConfigFileResolver())
+    definition = load_scene_definition(store, "interactive")
+    fragments = [fragment for fragment in definition.fragments if fragment.enabled and fragment.required]
+    text = "\n".join(store.load_fragment_template(fragment.path) for fragment in fragments)
+    for requirement in (
+        "每家公司分别调用 `list_documents`",
+        "`ticker` 与 `document_id` 的对应关系",
+        "`get_financial_statement` / `query_xbrl_facts`",
+        "一次获取多期",
+        "`search_document` 只用于定性分析或原文定位",
+        "单家公司自由检索不超过约 8 次",
+        "先给出已有证据支持的答案",
+        "列出未覆盖的数据点",
+    ):
+        assert requirement in text
+
+
 def _require_tool_selection(manifest: SceneManifestAsset) -> SceneToolSelectionAsset:
     """返回场景 manifest 中必填的工具选择配置。"""
 
