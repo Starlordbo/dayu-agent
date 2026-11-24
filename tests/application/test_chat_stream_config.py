@@ -23,7 +23,8 @@ def test_missing_config_keeps_ninety_seconds(run_config: StructuredConfigObject)
     """
     config = parse_chat_stream_config(run_config)
     assert config.first_chunk_timeout_seconds == 90.0
-    assert config.first_chunk_timeout_seconds_by_runner == {}
+    # Responses 通道在真实使用中首输出可达 90 秒以上，包内为其提供更长的等待窗口。
+    assert config.first_chunk_timeout_seconds_by_runner == {"openai_responses": 300.0}
     assert config.resolve_first_chunk_timeout_seconds("openai_responses") == 90.0
 
 

@@ -1,7 +1,9 @@
 {
   "chat_stream_config": {
     "first_chunk_timeout_seconds": 90.0,
-    "first_chunk_timeout_seconds_by_runner": {}
+    "first_chunk_timeout_seconds_by_runner": {
+      "openai_responses": 300.0
+    }
   },
   "runner_running_config": {
     "debug_sse": false,
