@@ -43,6 +43,7 @@ def _run(workspace: Path) -> ReportRun:
         output_dir=str(workspace / "draft" / _TICKER),
         error=None,
         log_path=str(workspace / "report.log"),
+        run_id=None,
     )
 
 
@@ -65,6 +66,7 @@ def _payload(workspace: Path) -> dict[str, JsonValue]:
         "output_dir": run.output_dir,
         "error": run.error,
         "log_path": run.log_path,
+        "run_id": run.run_id,
     }
 
 
@@ -131,7 +133,7 @@ def test_state_round_trip_and_atomic_replace(tmp_path: Path, state: ReportRunSta
     """
     path = report_run_path(tmp_path, _TICKER)
     error = "模拟中断或失败" if state in {ReportRunState.FAILED, ReportRunState.STALE} else None
-    run = replace(_run(tmp_path), state=state, error=error)
+    run = replace(_run(tmp_path), state=state, error=error, run_id="host-run-1")
     with patch("dayu.web.streamlit.report_runs.os.replace", wraps=os.replace) as atomic_replace:
         write_report_run(path, run)
     atomic_replace.assert_called_once()
@@ -147,6 +149,7 @@ def test_state_round_trip_and_atomic_replace(tmp_path: Path, state: ReportRunSta
     ("pid", "123"), ("pid", 1.5), ("started_at", "2026-11-24T12:00:00"),
     ("started_at", "invalid"), ("updated_at", None), ("output_dir", " "),
     ("log_path", ""), ("log_path", []), ("error", 3),
+    ("run_id", ""), ("run_id", " "), ("run_id", 123), ("run_id", False),
 ])
 def test_invalid_field_is_rejected_without_changing_file(
     tmp_path: Path, field_name: str, invalid: JsonValue,

@@ -109,12 +109,17 @@ def _resolve_services(
 
     返回值:
         ``(fins_service, chat_service, write_service)`` 三元组。
+
+    异常:
+        服务构造异常直接向上传播。
     """
 
     from dayu.contracts.session import SessionSource
     from dayu.services.chat_service import ChatService
     from dayu.services.fins_service import FinsService
     from dayu.services.write_service import WriteService
+    # 与 Service 一起延迟加载运行适配器，保留入口在装配前的轻量导入边界。
+    from dayu.web.streamlit.report_runtime import ReportRunLifecycleObserver
 
     if "fins_service" not in st.session_state:
         st.session_state["fins_service"] = FinsService(
@@ -141,6 +146,7 @@ def _resolve_services(
             scene_execution_acceptance_preparer=prepared_deps.scene_execution_acceptance_preparer,
             company_name_resolver=prepared_deps.fins_runtime.get_company_name,
             company_meta_summary_resolver=prepared_deps.fins_runtime.get_company_meta_summary,
+            run_lifecycle_observer=ReportRunLifecycleObserver(prepared_deps.host_admin_service),
         )
 
     return (
@@ -234,6 +240,7 @@ def main() -> None:
             write_service=write_service,
             model_names=chat_model_names,
             report_model_names=report_model_names,
+            host_admin_service=prepared_deps.host_admin_service,
         )
     else:
         st.error("财报服务不可用，无法展示股票详情。请检查配置后刷新页面。")

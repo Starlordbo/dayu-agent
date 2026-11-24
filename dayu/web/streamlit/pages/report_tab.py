@@ -8,11 +8,11 @@ from pathlib import Path
 import streamlit as st
 
 from dayu.services.contracts import WriteRequest, WriteRunConfig
-from dayu.services.protocols import WriteServiceProtocol
+from dayu.services.protocols import HostAdminServiceProtocol, WriteServiceProtocol
 from dayu.startup.config_file_resolver import resolve_package_assets_path
 from dayu.web.streamlit.components.watchlist import WatchlistItem
 from dayu.web.streamlit.report_runs import ReportRun, ReportRunState
-from dayu.web.streamlit.report_runtime import load_report_run, start_report_run
+from dayu.web.streamlit.report_runtime import cancel_report_run, load_report_run, start_report_run
 
 _POLL_SECONDS = 2.0
 _DEFAULT_TEMPLATE = "定性分析模板.md"
@@ -91,11 +91,17 @@ def _render_run_status(run: ReportRun | None, ticker: str, key_prefix: str) -> N
     if run is None:
         return
     started = datetime.fromisoformat(run.started_at)
-    end = datetime.now(timezone.utc) if run.state == ReportRunState.RUNNING else datetime.fromisoformat(run.updated_at)
+    end = datetime.now(timezone.utc) if run.state.is_active else datetime.fromisoformat(run.updated_at)
     elapsed = timedelta(seconds=max(0, int((end - started).total_seconds())))
     st.caption(f"开始时间：{started.astimezone().isoformat(timespec='seconds')} · 已运行：{elapsed}")
     if run.state == ReportRunState.RUNNING:
         st.info("运行中：已有报告任务正在后台生成，请等待完成。")
+        if run.error:
+            st.error(run.error)
+    elif run.state == ReportRunState.CANCELLING:
+        st.info("取消请求已提交，正在等待后台任务结束。")
+    elif run.state == ReportRunState.CANCELLED:
+        st.info("报告生成已取消，可重新生成。")
     elif run.state == ReportRunState.STALE:
         st.warning("上次运行已中断，可重试。")
     elif run.state == ReportRunState.FAILED:
@@ -107,12 +113,54 @@ def _render_run_status(run: ReportRun | None, ticker: str, key_prefix: str) -> N
         st.caption(f"任务日志：{run.log_path}")
 
 
+def _render_cancel_action(
+    run: ReportRun | None,
+    workspace_root: Path,
+    ticker: str,
+    key_prefix: str,
+    host_admin_service: HostAdminServiceProtocol | None,
+) -> None:
+    """为当前活动任务提交幂等取消，重绘后从磁盘显示受理或失败事实。
+
+    参数:
+        run: 本次页面读取的任务快照，用于校验取消归属。
+        workspace_root: 工作区根目录。
+        ticker: 当前公司股票代码。
+        key_prefix: 公司隔离的 UI 键前缀。
+        host_admin_service: 取消操作使用的管理服务；为空时禁用控件。
+    返回值:
+        无。
+    异常:
+        无；持久化、锁或调用错误转为页面提示。
+    """
+    if run is None or not run.state.is_active:
+        return
+    if host_admin_service is None:
+        st.warning("取消功能不可用（宿主管理服务未初始化）。")
+    # 点击会触发先读磁盘再重绘；控件身份绑定任务，避免旧页面点击误取消替换后的新任务。
+    submitted = st.button(
+        "取消", key=f"{key_prefix}_cancel_{run.log_path}",
+        disabled=run.state == ReportRunState.CANCELLING or host_admin_service is None,
+    )
+    if submitted and host_admin_service is not None:
+        try:
+            cancel_report_run(
+                workspace_root=workspace_root, ticker=ticker,
+                host_admin_service=host_admin_service, expected_run=run,
+            )
+        except (OSError, ValueError, RuntimeError) as exc:
+            st.error(f"取消请求失败：{exc}")
+        else:
+            st.rerun(scope="app")
+
+
 @st.fragment(run_every=_POLL_SECONDS)
 def _render_report_panel(
     selected_stock: WatchlistItem,
     workspace_root: Path,
     write_service: WriteServiceProtocol | None,
     model_names: tuple[str, ...],
+    host_admin_service: HostAdminServiceProtocol | None,
 ) -> None:
     """独立轮询报告状态与表单，使自动片段刷新同步更新提交按钮。
 
@@ -121,6 +169,7 @@ def _render_report_panel(
         workspace_root: 工作区根目录。
         write_service: 写作服务；为空时仅展示既有结果。
         model_names: 入口传入的可选模型名。
+        host_admin_service: 入口传入的管理服务；为空时不可取消。
     返回值:
         无。
     异常:
@@ -135,7 +184,7 @@ def _render_report_panel(
     except (OSError, ValueError) as exc:
         st.error(f"报告任务状态或模板读取失败：{exc}")
         return
-    running = run is not None and run.state == ReportRunState.RUNNING
+    running = run is not None and run.state.is_active
     if write_service is None:
         st.warning("分析报告功能不可用（写作服务未初始化）。")
     st.caption(f"目标输出目录：{output_dir}")
@@ -163,6 +212,7 @@ def _render_report_panel(
                     st.info("该公司已有报告任务正在启动或运行，请勿重复提交。")
             except (OSError, ValueError, RuntimeError) as exc:
                 st.error(f"报告任务启动失败：{exc}")
+    _render_cancel_action(run, workspace_root, ticker, key_prefix, host_admin_service)
     _render_run_status(run, ticker, key_prefix)
 
 
@@ -171,6 +221,7 @@ def render_report_tab(
     workspace_root: Path,
     write_service: WriteServiceProtocol | None,
     model_names: tuple[str, ...] = (),
+    host_admin_service: HostAdminServiceProtocol | None = None,
 ) -> None:
     """渲染分析报告 Tab。
 
@@ -179,6 +230,7 @@ def render_report_tab(
         workspace_root: 工作区根目录。
         write_service: 写作服务协议实例；为 None 时分析报告功能不可用。
         model_names: 沿用入口已配置的可选模型清单；空选择保留场景默认值。
+        host_admin_service: 宿主管理服务协议实例；为空时禁用取消。
 
     返回值:
         无。
@@ -187,4 +239,4 @@ def render_report_tab(
         无。
     """
 
-    _render_report_panel(selected_stock, workspace_root, write_service, model_names)
+    _render_report_panel(selected_stock, workspace_root, write_service, model_names, host_admin_service)

@@ -130,6 +130,7 @@ flowchart LR
 - `UI` 决定调用哪个 `Service`，并把结果渲染给宿主用户。
 - `UI` 可以在启动期一次准备稳定依赖，但不应该为一次 CLI 请求预先创建所有 `Service`；当前 CLI 按命令分支惰性创建所需 `Service`。
 - `startup preparation` 只把启动期原始来源收敛成稳定依赖。
+- 共享 Host 运行时依赖保留启动恢复使用的管理服务，供 UI 显式注入取消入口。Web 报告通过生命周期观察者关联后台任务与 Host 身份，取消仍经过 Service，终态以 Host 收口后的服务退出契约为准。
 - `Service` 决定“这次业务上要做什么”。
 - `Contract preparation` 只把 Service 已做出的决策收敛成 `Execution Contract`。
 - `Host` 决定“这次执行如何被托管、追踪、取消、恢复和治理”。

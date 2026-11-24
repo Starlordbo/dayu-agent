@@ -30,7 +30,7 @@
 - `pages/filing_tab.py`：财报下载与处理页面。
 - `pages/chat_tab.py`：交互式分析页面编排（渲染、输入、历史加载、清空会话、流式轮询）。
 - `pages/report_tab.py`：分析报告表单、独立片段轮询与 Markdown 阅读下载。
-- `report_runtime.py`：通过写作服务协议在后台线程执行，以文件锁保护启动与状态变更。
+- `report_runtime.py`：通过写作服务协议在后台线程执行，以文件锁保护启动、身份登记、取消与状态变更。
 - `report_runs.py`：报告任务磁盘快照的严格解析与原子读写。
 
 
@@ -84,10 +84,13 @@ worker 在消费事件流前将提交信息投递给 UI；UI 使用该阈值及�
 ### 报告执行与恢复
 
 - 页面只向 `WriteServiceProtocol.run(WriteRequest)` 提交请求，后台线程不访问 Streamlit 上下文；Host 仍负责业务运行的生命周期与并发治理。
-- 运行事实保存在 `workspace/.dayu/streamlit/report_runs/<TICKER>.json`，字段为 `state`、`pid`、`started_at`、`updated_at`、`output_dir`、`error`、`log_path`。不放入聊天状态、`st.session_state` 或进程内任务字典。
+- 运行事实保存在 `workspace/.dayu/streamlit/report_runs/<TICKER>.json`，字段为 `state`、`pid`、`started_at`、`updated_at`、`output_dir`、`error`、`log_path`、`run_id`。`run_id` 在 Host 登记前为空。磁盘记录是真源，不放入聊天状态、`st.session_state` 或进程内任务字典。
 - JSON 通过同目录临时文件及 `os.replace` 原子发布。固定的 `<TICKER>.lock` 文件使用项目跨平台文件锁，串行化“检查已有任务、写 running、启动线程”；UI 竞争失败立即返回提示，不阻塞等待。锁文件保留，避免删除后产生不同 inode 的锁竞争漏洞。
-- 读取 `running` 时通过进程判活接口校验 pid（POSIX 为 `os.kill(pid, 0)`）；进程消失则在锁内重新读取并落 `stale`。失败写入明确 `error`，线程启动失败同样落 `failed`，随后允许重试。
+- 读取 `running` 或 `cancelling` 时通过进程判活接口校验 pid（POSIX 为 `os.kill(pid, 0)`）；进程消失则在锁内重新读取并落 `stale`。失败写入明确 `error`，线程启动失败同样落 `failed`，随后允许重试。
+- Web 为 `WriteService` 注入 `RunLifecycleObserver` 实现。worker 在线程内设置并最终复位 `ContextVar`，同步 Host operation 的 register 回调据此写入正确 ticker 的 `run_id`；同一 observer 可并行服务多个 ticker。clear 只清理瞬时登记，不清空磁盘身份或抢先提交终态。
+- 页面取消通过 `HostAdminServiceProtocol.cancel_run(run_id)` 提交。先在报告锁内持久化 `cancelling`，身份未出现时由 register 补发；重复请求不重复提交。取消异常恢复 `running` 并持久化原因，允许重试。`cancelling` 仍禁止生成，只有服务返回 `WRITE_CANCELLED_EXIT_CODE` 才落 `cancelled`，成功与异常则按各自退出契约收尾。
+- worker 收尾与取消均核对启动时间、pid、唯一日志路径，防止迟到操作覆盖后续任务；取消按钮键也绑定任务身份，旧页面按钮事件不能取消同 ticker 的新任务。
 - `st.fragment(run_every=2.0)` 包含报告表单与状态，终态片段可自行恢复按钮及展示输出目录中的报告，不依赖聊天队列或其片段。阶段不可获得时显示“运行中”。
 - 每次任务有独立日志，记录启动、终态和错误；不重定向进程共享 stdout/stderr，也不承诺流水线逐阶段日志。损坏状态显式报错，不静默覆盖。
-- 空白联网 provider 在 WriteService 内从已解析执行配置补齐，使网页与 CLI 的断点续写签名保持同源。报告状态是新增文件格式，没有旧报告状态库或兼容读取路径。
+- 空白联网 provider 在 WriteService 内从已解析执行配置补齐，使网页与 CLI 的断点续写签名保持同源。报告运行时严格读取当前 schema；旧状态仅由 `dayu-cli init` 的 `workspace_migrations` 插件原地迁移，存活旧 worker 会阻止迁移，死进程旧运行态转 `stale`，报告和日志保留。
 - 后台线程随服务进程退出；重启后恢复的是任务状态，不会自动重启写作。当前仅有 pid 判活，不能区分 pid 被操作系统复用的情况。状态文件写入失败会记录服务端错误日志；磁盘不可写时无法保证终态持久化。

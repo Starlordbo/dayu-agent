@@ -329,7 +329,11 @@ python -m dayu.web
 
 在“分析报告”页选择模板、可选模型覆盖及是否从已有进度继续（resume），点击“生成报告”。模板优先使用工作区 `assets/` 下的 Markdown 文件，也可选择内置默认模板；留空模型覆盖沿用场景配置。任务在后台执行，页面每 2 秒刷新运行状态，显示开始时间与已运行时长；同一公司已有任务时禁止重复启动。
 
-报告默认写入 `workspace/draft/<TICKER>/<TICKER>_qual_report.md`，完成后可直接阅读并下载 Markdown。刷新页面或换标签页会恢复磁盘记录；如果服务进程已经退出，页面提示“上次运行已中断，可重试”。失败原因与本次任务日志路径会显示在页面。本页不提供取消或 HTML/PDF 导出。
+生成期间可点击“取消”；页面显示“取消请求已提交”，待后台任务确认退出后显示“已取消”，即可重新生成。任务尚未取得运行身份时也会保留取消请求，并在身份出现后提交。取消失败会显示原因，可重试。
+
+报告默认写入 `workspace/draft/<TICKER>/<TICKER>_qual_report.md`，完成后可直接阅读并下载 Markdown。刷新页面或换标签页会恢复磁盘记录；如果服务进程已经退出，页面提示“上次运行已中断，可重试”。失败原因与本次任务日志路径会显示在页面。本页不提供 HTML/PDF 导出。
+
+升级已有报告状态文件时，先停止旧 Web 进程，再执行 `dayu-cli init --base <工作区目录>`。初始化会原地升级报告状态格式并保留报告和日志；仍存活的旧报告任务会阻止该迁移。
 
 功能说明：详见[dayu/web/README.md](dayu/web/README.md)
 
@@ -1350,6 +1354,6 @@ dayu-render workspace/draft/AAPL/AAPL_qual_report.md report.html
 - CLI 对话可用 `dayu-cli interactive --model-name openai-responses`。
 - CLI 报告通过 `--model-name openai-responses` 同时覆盖主写作与原有核查场景；显式
   `--audit-model-name` 仍可单独覆盖核查模型。不传模型参数时，各 scene 使用原默认值。
-- 网页“分析报告”页的模型覆盖同时用于主写作与原有核查场景；可后台生成、查看状态及下载 Markdown，刷新不会再次触发生成。
+- 网页“分析报告”页的模型覆盖同时用于主写作与原有核查场景；可后台生成、取消、查看状态及下载 Markdown，刷新不会再次触发生成。
 
 用量中的费用为估算，缺价格或失败请求的用量未知时会明确标记不完整，不是实际账单。

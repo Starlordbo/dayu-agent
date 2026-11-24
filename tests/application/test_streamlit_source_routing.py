@@ -20,9 +20,13 @@ from dayu.fins.domain.document_reference import (
     SourceSectionView,
 )
 from dayu.services.fins_service import FinsService
-from dayu.services.protocols import ChatServiceProtocol, FinsServiceProtocol, WriteServiceProtocol
+from dayu.services.protocols import (
+    ChatServiceProtocol, FinsServiceProtocol, HostAdminServiceProtocol, WriteServiceProtocol,
+)
 from dayu.services.startup_preparation import PreparedHostRuntimeDependencies, prepare_host_runtime_dependencies
+from dayu.services.write_service import WriteService
 from dayu.web.streamlit.components.watchlist import WatchlistItem, save_watchlist_items
+from dayu.web.streamlit.report_runtime import ReportRunLifecycleObserver
 from tests.application.test_material_tab import RecordingService
 from tests.application.test_streamlit_chat_render import _ChatService, _turn
 
@@ -104,6 +108,7 @@ class _DetailCall:
     chat_service: ChatServiceProtocol
     write_service: WriteServiceProtocol
     model_names: tuple[str, ...]
+    host_admin_service: HostAdminServiceProtocol | None
 
 
 @dataclass
@@ -117,6 +122,7 @@ class _DetailRecorder:
         fins_service: FinsServiceProtocol, chat_service: ChatServiceProtocol,
         write_service: WriteServiceProtocol, model_names: tuple[str, ...] = (),
         report_model_names: tuple[str, ...] = (),
+        host_admin_service: HostAdminServiceProtocol | None = None,
     ) -> None:
         """记录详情页注入参数，不提交聊天或财报命令。
 
@@ -128,6 +134,7 @@ class _DetailRecorder:
             write_service: 真实构造的写作服务。
             model_names: 对话场景允许且已配置的模型名。
             report_model_names: 报告场景允许且已配置的模型名。
+            host_admin_service: 报告取消使用的宿主管理服务。
         返回值:
             无。
         异常:
@@ -135,6 +142,7 @@ class _DetailRecorder:
         """
         self.calls.append(_DetailCall(
             selected_stock, workspace_root, fins_service, chat_service, write_service, model_names,
+            host_admin_service,
         ))
 
 
@@ -475,6 +483,9 @@ def test_main_selected_stock_constructs_services_and_caches_identity(
     assert isinstance(first.fins_service, FinsService)
     assert first.fins_service.host is prepared_deps.host
     assert first.fins_service.fins_runtime is prepared_deps.fins_runtime
+    assert first.host_admin_service is prepared_deps.host_admin_service
+    assert isinstance(first.write_service, WriteService)
+    assert isinstance(first.write_service.run_lifecycle_observer, ReportRunLifecycleObserver)
     preparer = prepared_deps.scene_execution_acceptance_preparer
     assert set(first.model_names) == (
         set(preparer.model_catalog.load_models()) & set(preparer.read_scene_definition("interactive").model.allowed_names)

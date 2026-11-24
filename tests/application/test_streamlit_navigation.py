@@ -8,7 +8,9 @@ from unittest.mock import Mock
 import pytest
 from streamlit.testing.v1 import AppTest
 
-from dayu.services.protocols import ChatServiceProtocol, FinsServiceProtocol, WriteServiceProtocol
+from dayu.services.protocols import (
+    ChatServiceProtocol, FinsServiceProtocol, HostAdminServiceProtocol, WriteServiceProtocol,
+)
 from dayu.web.streamlit.pages import main_page
 
 from dayu.web.streamlit.components.watchlist import WatchlistItem, save_watchlist_items
@@ -172,7 +174,8 @@ import streamlit as st
 from dayu.web.streamlit.components.watchlist import WatchlistItem
 from dayu.web.streamlit.pages.main_page import render_stock_detail_page
 render_stock_detail_page(WatchlistItem("MSFT", "Microsoft", "", ""), Path(st.session_state["workspace"]),
-                         st.session_state["fins"], st.session_state["chat"], st.session_state["write"])
+                         st.session_state["fins"], st.session_state["chat"], st.session_state["write"],
+                         host_admin_service=st.session_state["host_admin_service"])
 """
 
 
@@ -200,6 +203,8 @@ def test_detail_page_restores_tab_default(
     app.session_state["fins"] = Mock(spec=FinsServiceProtocol)
     app.session_state["chat"] = Mock(spec=ChatServiceProtocol)
     app.session_state["write"] = Mock(spec=WriteServiceProtocol)
+    admin = Mock(spec=HostAdminServiceProtocol)
+    app.session_state["host_admin_service"] = admin
     if view is not None:
         app.query_params["view"] = view
     app.run()
@@ -207,3 +212,4 @@ def test_detail_page_restores_tab_default(
     assert app.get("tab_container")[0].proto.tab_container.default_tab_index == index
     assert [tab.label for tab in app.tabs] == ["🧾 财报管理", "🧠 交互式分析", "📊 分析报告", "📞 会议纪要"]
     assert all(renderer.call_count == 1 for renderer in renderers)
+    assert renderers[2].call_args.kwargs["host_admin_service"] is admin

@@ -26,6 +26,7 @@ from dayu.cli.workspace_migrations.host_store_rename_concurrency_lane import (
 from dayu.cli.workspace_migrations.host_store_strip_max_output_tokens import (
     migrate_host_store_strip_max_output_tokens,
 )
+from dayu.cli.workspace_migrations.report_run_identity import migrate_report_run_identity
 from dayu.cli.workspace_migrations.run_json_write_chapter_lane import (
     migrate_run_json_add_write_chapter_lane,
 )
@@ -49,6 +50,8 @@ def apply_all_workspace_migrations(*, base_dir: Path, config_dir: Path) -> None:
         OSError: 文件 I/O 失败时由迁移函数原样抛出。
         sqlite3.Error: SQLite 操作失败时由迁移函数原样抛出。
         json.JSONDecodeError: JSON 解析失败时由迁移函数原样抛出。
+        ValueError: 持久状态 schema 非法时由迁移函数原样抛出。
+        RuntimeError: 报告状态锁被占用或旧报告进程仍存活，需处理后重试。
     """
 
     if migrate_run_json_add_write_chapter_lane(config_dir):
@@ -78,3 +81,7 @@ def apply_all_workspace_migrations(*, base_dir: Path, config_dir: Path) -> None:
             "✓ 工作区迁移: 旧 conversation transcript 已升级为 "
             f"ConversationSessionArchive（共 {archive_rewritten} 个会话）"
         )
+
+    report_rewritten = migrate_report_run_identity(base_dir)
+    if report_rewritten > 0:
+        print(f"✓ 工作区迁移: 报告运行态已补齐 run_id（共 {report_rewritten} 个任务）")

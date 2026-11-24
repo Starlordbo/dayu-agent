@@ -19,6 +19,7 @@ from dayu.fins.service_runtime import DefaultFinsRuntime
 from dayu.host import Host
 from dayu.services.scene_execution_acceptance import SceneExecutionAcceptancePreparer
 from dayu.services.startup_preparation import PreparedHostRuntimeDependencies
+from dayu.services.host_admin_service import HostAdminService
 from dayu.services.chat_stream_config import ChatStreamConfig
 from dayu.startup.workspace import WorkspaceResources
 from dayu.wechat.service_manager import InstalledServiceDefinition, ServiceSpec, ServiceStatus
@@ -1053,6 +1054,7 @@ def test_prepare_wechat_host_dependencies_runs_unified_startup_recovery(
                 default_execution_options=fake_default_execution_options,
                 scene_execution_acceptance_preparer=fake_scene_preparer,
                 host=fake_host,
+                host_admin_service=HostAdminService(host=fake_host),
                 fins_runtime=fake_fins_runtime,
                 chat_stream_config=ChatStreamConfig(),
             )

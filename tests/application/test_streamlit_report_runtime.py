@@ -121,6 +121,7 @@ def _payload(workspace: Path, *, pid: int | None = None) -> dict[str, str | int 
         "started_at": _STARTED_AT, "updated_at": _STARTED_AT,
         "output_dir": str(workspace / "draft" / _TICKER), "error": None,
         "log_path": str(workspace / "report.log"),
+        "run_id": None,
     }
 
 
@@ -154,7 +155,7 @@ def _wait_terminal(workspace: Path, ticker: str = _TICKER) -> ReportRun:
     deadline = monotonic() + _WAIT_SECONDS
     while monotonic() < deadline:
         run = load_report_run(workspace, ticker)
-        if run is not None and run.state is not ReportRunState.RUNNING:
+        if run is not None and not run.state.is_active:
             return run
         Event().wait(_POLL_SECONDS)
     raise AssertionError("后台任务未落终态")
@@ -203,7 +204,7 @@ def test_worker_runs_off_main_thread_and_persists_success(tmp_path: Path) -> Non
         assert not start_report_run(workspace_root=tmp_path, write_service=service, request=request)
         assert len(service.requests) == 1
         assert set(json.loads(_state_path(tmp_path).read_text(encoding="utf-8"))) == {
-            "state", "pid", "started_at", "updated_at", "output_dir", "error", "log_path",
+            "state", "pid", "started_at", "updated_at", "output_dir", "error", "log_path", "run_id",
         }
     finally:
         service.release.set()
@@ -513,7 +514,7 @@ def test_late_worker_cannot_overwrite_replacement_run(tmp_path: Path) -> None:
     assert original is not None
     replacement = replace(original, started_at="2026-11-24T13:00:00+00:00")
     report_runtime.write_report_run(_state_path(tmp_path), replacement)
-    report_runtime._finish_report_run(_state_path(tmp_path), original, error=None)
+    report_runtime._finish_report_run(_state_path(tmp_path), original, state=ReportRunState.SUCCEEDED, error=None)
     assert load_report_run(tmp_path, _TICKER) == replacement
 
 

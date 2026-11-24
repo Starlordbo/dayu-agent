@@ -12,6 +12,7 @@ from dayu.execution.options import ExecutionOptions, ResolvedExecutionOptions
 from dayu.contracts.infrastructure import StructuredConfigObject
 from dayu.fins.service_runtime import DefaultFinsRuntime
 from dayu.host import Host
+from dayu.services.host_admin_service import HostAdminService
 from dayu.services.scene_execution_acceptance import SceneExecutionAcceptancePreparer
 from dayu.services.startup_preparation import prepare_host_runtime_dependencies
 from dayu.startup.workspace import WorkspaceResources
@@ -22,7 +23,16 @@ def test_prepare_host_runtime_dependencies_runs_unified_startup_recovery(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """共享 Host 启动准备应在装配完成后执行统一 startup recovery。"""
+    """共享 Host 启动准备复用同一管理服务执行恢复并供入口注入。
+
+    参数:
+        monkeypatch: 装配依赖替换工具。
+        tmp_path: 独立工作区。
+    返回值:
+        无。
+    异常:
+        AssertionError: 恢复与返回依赖未复用相同 Host 管理服务。
+    """
 
     fake_paths = SimpleNamespace(
         workspace_root=tmp_path,
@@ -35,7 +45,7 @@ def test_prepare_host_runtime_dependencies_runs_unified_startup_recovery(
     fake_scene_preparer = cast(SceneExecutionAcceptancePreparer, object())
     fake_fins_runtime = cast(DefaultFinsRuntime, object())
     fake_host = cast(Host, object())
-    recover_calls: list[tuple[Host, str, str]] = []
+    recover_calls: list[tuple[HostAdminService, str, str]] = []
 
     monkeypatch.setattr(
         "dayu.services.startup_preparation.resolve_startup_paths",
@@ -92,7 +102,7 @@ def test_prepare_host_runtime_dependencies_runs_unified_startup_recovery(
     monkeypatch.setattr(
         "dayu.services.startup_preparation.recover_host_startup_state",
         lambda host_admin_service, *, runtime_label, log_module: recover_calls.append(
-            (cast(Host, host_admin_service.host), runtime_label, log_module)
+            (host_admin_service, runtime_label, log_module)
         ),
     )
 
@@ -109,7 +119,9 @@ def test_prepare_host_runtime_dependencies_runs_unified_startup_recovery(
     assert prepared.scene_execution_acceptance_preparer is fake_scene_preparer
     assert prepared.host is fake_host
     assert prepared.fins_runtime is fake_fins_runtime
-    assert recover_calls == [(fake_host, "Shared Host runtime", "APP.TEST")]
+    assert isinstance(prepared.host_admin_service, HostAdminService)
+    assert prepared.host_admin_service.host is fake_host
+    assert recover_calls == [(prepared.host_admin_service, "Shared Host runtime", "APP.TEST")]
 
 
 @pytest.mark.unit

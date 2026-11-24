@@ -20,6 +20,7 @@ from dayu.services.concurrency_lanes import SERVICE_DEFAULT_LANE_CONFIG
 from dayu.services.chat_stream_config import ChatStreamConfig, parse_chat_stream_config
 from dayu.services.conversation_policy_reader import ConversationPolicyReader
 from dayu.services.host_admin_service import HostAdminService
+from dayu.services.protocols import HostAdminServiceProtocol
 from dayu.services.fins_download_lane_gate import GovernorCnDownloadPdfGate
 from dayu.services.scene_definition_reader import SceneDefinitionReader
 from dayu.services.scene_execution_acceptance import SceneExecutionAcceptancePreparer
@@ -55,6 +56,7 @@ class PreparedHostRuntimeDependencies:
         default_execution_options: 启动期解析后的默认执行选项。
         scene_execution_acceptance_preparer: scene 执行接受准备器。
         host: Host 实例。
+        host_admin_service: 与 Host 绑定并已用于启动恢复的管理服务。
         fins_runtime: 财报领域运行时。
         chat_stream_config: 已校验的聊天首输出等待配置。
     """
@@ -63,6 +65,7 @@ class PreparedHostRuntimeDependencies:
     default_execution_options: ResolvedExecutionOptions
     scene_execution_acceptance_preparer: SceneExecutionAcceptancePreparer
     host: Host
+    host_admin_service: HostAdminServiceProtocol
     fins_runtime: FinsRuntimeProtocol
     chat_stream_config: ChatStreamConfig
 
@@ -108,7 +111,7 @@ def prepare_host_runtime_dependencies(
     runtime_label: str,
     log_module: str,
 ) -> PreparedHostRuntimeDependencies:
-    """准备 CLI / WeChat 共用的 Host 运行时稳定依赖。
+    """准备 CLI / Web / WeChat 共用的 Host 运行时稳定依赖。
 
     Args:
         workspace_root: 工作区根目录。
@@ -190,8 +193,9 @@ def prepare_host_runtime_dependencies(
         ),
         event_bus=None,
     )
+    host_admin_service = HostAdminService(host=host)
     recover_host_startup_state(
-        HostAdminService(host=host),
+        host_admin_service,
         runtime_label=runtime_label,
         log_module=log_module,
     )
@@ -200,6 +204,7 @@ def prepare_host_runtime_dependencies(
         default_execution_options=default_execution_options,
         scene_execution_acceptance_preparer=scene_execution_acceptance_preparer,
         host=host,
+        host_admin_service=host_admin_service,
         fins_runtime=fins_runtime,
         chat_stream_config=chat_stream_config,
     )

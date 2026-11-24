@@ -83,6 +83,7 @@ from dayu.startup.config_loader import ConfigLoader
 from dayu.startup.prompt_assets import FilePromptAssetStore
 from dayu.fins.toolset_registrars import register_fins_read_toolset as _register_fins_read_toolset
 from dayu.services.startup_preparation import PreparedHostRuntimeDependencies
+from dayu.services.host_admin_service import HostAdminService
 from dayu.services.chat_stream_config import ChatStreamConfig
 class _CallCollector:
     """测试调用记录器。"""
@@ -2659,6 +2660,7 @@ def test_prepare_cli_host_dependencies_runs_unified_startup_recovery(
                 default_execution_options=fake_default_execution_options,
                 scene_execution_acceptance_preparer=fake_scene_preparer,
                 host=fake_host,
+                host_admin_service=HostAdminService(host=fake_host),
                 fins_runtime=fake_fins_runtime,
                 chat_stream_config=ChatStreamConfig(),
             )

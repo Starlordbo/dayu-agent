@@ -12,6 +12,7 @@ import streamlit as st
 from dayu.services.protocols import (
     ChatServiceProtocol,
     FinsServiceProtocol,
+    HostAdminServiceProtocol,
     WriteServiceProtocol,
 )
 from dayu.web.streamlit.components.watchlist import WatchlistItem
@@ -62,6 +63,7 @@ def render_stock_detail_page(
     write_service: WriteServiceProtocol,
     model_names: tuple[str, ...] = (),
     report_model_names: tuple[str, ...] = (),
+    host_admin_service: HostAdminServiceProtocol | None = None,
 ) -> None:
     """渲染股票详情页面（选中自选股后展示）。
 
@@ -73,6 +75,7 @@ def render_stock_detail_page(
         write_service: 写作服务协议实例。
         model_names: 可选择的对话模型名称（interactive 场景）。
         report_model_names: 可选择的报告模型名称（write 场景）。
+        host_admin_service: 报告取消使用的宿主管理服务；缺失时禁用取消。
 
     返回值:
         无。
@@ -111,6 +114,7 @@ def render_stock_detail_page(
             workspace_root=workspace_root,
             write_service=write_service,
             model_names=report_model_names,
+            host_admin_service=host_admin_service,
         )
 
     with tabs[3]:

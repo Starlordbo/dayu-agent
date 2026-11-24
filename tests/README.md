@@ -128,7 +128,7 @@ pip install -r requirements.txt
 - `tests/application/test_console_output.py` 负责守住 CLI / WeChat / render 入口的标准流容错边界：在非 UTF-8 终端里打印中文 help 或错误文案时不得因 `UnicodeEncodeError` 崩溃。
 - `tests/cli/test_init_command.py` 还要守住 `dayu-cli init` 的交互输入边界：测试不得隐式依赖开发机已有的 `SEC_USER_AGENT` 等环境变量短路交互流程，凡是验证完整 `run_init_command()` 路径的用例，都应显式 `delenv/setenv` 相关变量并提供完整输入序列；`--reset` 这类破坏性开关还必须验证二次确认语义，且直接回车默认按 `N` 取消。
 - `tests/cli/test_init_command.py` 还要守住已有 workspace 的增量补齐语义：未传 `--overwrite` 时，`init` 只能补齐缺失的 `config/prompts/**` 资产，不能覆盖用户本地已经改过的 manifest、scene 或其他配置文件。
-- `tests/cli/workspace_migrations/` 负责守住 `dayu-cli init` 启动期的一次性 schema 迁移：`run.json` lane 新 key 只能补缺省值，必须保留用户已有取值；Host SQLite 与 transcript 类迁移必须幂等、fail-fast，不能在请求期补救。
+- `tests/cli/workspace_migrations/` 负责守住 `dayu-cli init` 启动期的一次性 schema 迁移：`run.json` lane 新 key 只能补缺省值，必须保留用户已有取值；Host SQLite 与 transcript 类迁移必须幂等、fail-fast，不能在请求期补救。报告状态迁移覆盖严格 schema、运行锁、存活旧进程拒绝、死进程转 stale，以及报告与日志保留。
 - `tests/services/test_fins_download_lane_gate.py` 负责守住 Service 装配出的 CN/HK PDF 下载段 gate：必须使用可轮询取消的 `try_acquire`，等待 permit 时要响应取消并按节流周期回收 dead-PID stale permit，不能把 Docling 转换包进下载 lane。
 - `tests/application/test_cancellation_bridge.py` 与 `tests/engine/test_async_openai_runner_utils.py` 这类并发/超时测试，不得把 0.08s、0.2s 这类固定 sleep 当成必然成立的完成信号；应使用带超时的轮询等待来守住语义，避免 CI runner 时序抖动造成伪失败。
 - `tests/fins/test_storage_batch_recovery.py` 这类跨进程锁测试同样不得把 5 秒级硬编码收口时间当成必然成立的环境保证；应使用具名超时常量和轮询等待，让较慢的 Windows runner 仍能验证同一套锁语义，而不是把时序抖动误报成存储回归。
@@ -136,7 +136,8 @@ pip install -r requirements.txt
 - `test_web_routes.py` 还要守住 `/api/write` 的未支持语义：FastAPI 写作路由当前必须显式返回 `501`，不能用 `202` / `accepted=true` 伪装成已受理；Streamlit 报告页通过独立的 Service 调用路径执行。
 - `test_streamlit_watchlist.py` 负责守住 Streamlit 自选股组件的本地持久化与表格合并边界：`workspace/.dayu/streamlit/watchlist.json` 读写、删除/编辑/新增合并、必填校验与 ticker 去重语义不能漂移。
 - `test_streamlit_report_runs.py` 与 `test_streamlit_report_runtime.py` 守住报告磁盘真源：严格 JSON 校验、原子替换、ticker 隔离、pid 失联恢复、并发排他启动、线程及服务失败收尾；全部使用受控假 WriteService。
-- `test_streamlit_report_tab.py` 用真实 AppTest 验证模板/模型/resume、运行态、失败重试、全新会话恢复、报告正文及 Markdown 下载。`test_streamlit_report_fragment.py` 在同一 runner 内投递真实自动片段请求，验证 2 秒轮询消息、磁盘终态与控件恢复，不把整页重跑当作片段刷新。
+- `test_streamlit_report_cancel.py` 用假 WriteService 与真实 observer 验证身份落盘、提前取消、重复提交、取消失败重试、多 ticker 上下文隔离与终态保护。`test_streamlit_report_host_cancel.py` 只替换流水线主体，验证真实 Host、WriteService、管理服务与 observer 的取消收敛，不调用模型。
+- `test_streamlit_report_tab.py` 用真实 AppTest 验证模板/模型/resume、运行态、失败重试、取消与重新生成、旧页面按钮隔离、全新会话恢复、报告正文及 Markdown 下载。`test_streamlit_report_fragment.py` 在同一 runner 内投递真实自动片段请求，验证 2 秒轮询消息、成功/取消终态与控件恢复，不把整页重跑当作片段刷新。
 - `test_write_service.py` 的 provider 继承测试只检查传入假流水线的配置，守住空白值从已解析选项补齐、显式值保留及 resume 不丢失；禁止为报告页面验收运行真实写作流水线。
 - `test_streamlit_chat_utils.py` 负责守住 `chat/utils.py` 的 session/trace 标识生成、流式文本提取与 Markdown 归一，以及事件折叠保留副作用消息等纯函数语义。
 - `test_streamlit_chat_stream_runtime.py` 负责守住 `chat/stream_runtime.py` 的首 chunk 超时、chunk 间超时、本次提交取消信号、worker 退出后 trailing event 消费与 error 事件收口语义；超时不得立即标记完成，取消文案必须等待 Host 流收尾。

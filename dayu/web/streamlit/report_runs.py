@@ -30,9 +30,24 @@ class ReportRunState(str, Enum):
     """报告任务在磁盘上持久化的生命周期状态。"""
 
     RUNNING = "running"
+    CANCELLING = "cancelling"
+    CANCELLED = "cancelled"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     STALE = "stale"
+
+    @property
+    def is_active(self) -> bool:
+        """判断任务是否仍占用该公司的生成入口。
+
+        参数:
+            无。
+        返回值:
+            正在执行或等待取消收敛时为真。
+        异常:
+            无。
+        """
+        return self in {ReportRunState.RUNNING, ReportRunState.CANCELLING}
 
 
 @dataclass(frozen=True)
@@ -46,6 +61,7 @@ class ReportRun:
     output_dir: str
     error: str | None
     log_path: str
+    run_id: str | None
 
 
 _RUN_FIELDS = frozenset(field.name for field in fields(ReportRun))
@@ -67,6 +83,19 @@ def normalize_report_ticker(ticker: str) -> str:
     return normalized
 
 
+def report_run_directory(workspace_root: Path) -> Path:
+    """定位报告运行元数据目录，供运行时与工作区迁移共用。
+
+    参数:
+        workspace_root: 当前工作区根目录。
+    返回值:
+        运行状态目录，不创建文件。
+    异常:
+        无。
+    """
+    return workspace_root / _RUN_DIRECTORY
+
+
 def report_run_path(workspace_root: Path, ticker: str) -> Path:
     """计算按股票代码隔离的报告任务状态路径，不创建目录。
 
@@ -78,7 +107,7 @@ def report_run_path(workspace_root: Path, ticker: str) -> Path:
     Raises:
         ValueError: 股票代码无法安全构成文件名。
     """
-    return workspace_root / _RUN_DIRECTORY / f"{normalize_report_ticker(ticker)}.json"
+    return report_run_directory(workspace_root) / f"{normalize_report_ticker(ticker)}.json"
 
 
 def _required_text(payload: dict[str, JsonValue], field_name: str) -> str:
@@ -140,6 +169,9 @@ def _parse_report_run(payload: JsonValue) -> ReportRun:
         raise ValueError("报告任务状态 error 必须是文本或 null")
     if state is ReportRunState.FAILED and (error is None or not error.strip()):
         raise ValueError("失败的报告任务必须包含错误原因")
+    run_id = payload["run_id"]
+    if run_id is not None and (not isinstance(run_id, str) or not run_id.strip()):
+        raise ValueError("报告任务状态 run_id 必须是非空文本或 null")
     return ReportRun(
         state=state,
         pid=pid,
@@ -148,6 +180,7 @@ def _parse_report_run(payload: JsonValue) -> ReportRun:
         output_dir=_required_text(payload, "output_dir"),
         error=error,
         log_path=_required_text(payload, "log_path"),
+        run_id=run_id,
     )
 
 
@@ -190,6 +223,7 @@ def write_report_run(path: Path, run: ReportRun) -> None:
         "output_dir": run.output_dir,
         "error": run.error,
         "log_path": run.log_path,
+        "run_id": run.run_id,
     }
     _parse_report_run(payload)
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -14,7 +14,9 @@ from streamlit.runtime.scriptrunner_utils.script_run_context import ScriptRunCon
 from streamlit.testing.v1.element_tree import parse_tree_from_messages
 from streamlit.testing.v1.local_script_runner import LocalScriptRunner
 
-from tests.application.test_streamlit_report_tab import FakeWriteService, _REPORT, _app, _wait_terminal
+from tests.application.test_streamlit_report_tab import (
+    FakeWriteService, _REPORT, _TIMEOUT, _admin_service, _app, _wait_terminal,
+)
 
 
 _PLAN_KEY = "test_report_fragment_rerun_plan"
@@ -30,6 +32,7 @@ class _ReportFragmentPlan:
     runs: list[tuple[tuple[str, ...], ScriptRunnerEvent]] = field(default_factory=list)
     auto_reruns: list[tuple[str, float]] = field(default_factory=list)
     initial_button_disabled: bool | None = None
+    initial_cancel_disabled: bool | None = None
     scheduled: bool = False
 
 
@@ -67,6 +70,7 @@ class _ReportFragmentScriptRunner(LocalScriptRunner):
         ]
         tree = parse_tree_from_messages(messages)
         plan.initial_button_disabled = tree.button[0].disabled
+        plan.initial_cancel_disabled = tree.button[1].disabled
         # 缺失或多出片段时让主测试给出明确断言，避免后台线程异常遮蔽根因。
         if len(ctx.new_fragment_ids) != 1:
             return
@@ -80,26 +84,34 @@ class _ReportFragmentScriptRunner(LocalScriptRunner):
         ))
 
 
+@pytest.mark.parametrize("cancelled", [False, True])
 def test_report_terminal_fragment_updates_result_and_controls_without_full_rerun(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    cancelled: bool,
 ) -> None:
     """实际两秒轮询消息对应的片段应读取磁盘终态并独立恢复按钮与报告。
 
     参数:
         tmp_path: 独立工作区。
         monkeypatch: 仅替换 AppTest 创建 runner 的测试扩展点。
+        cancelled: 是否在自动片段刷新前先提交取消。
     返回值:
         无。
     异常:
         AssertionError: 自动轮询消息、片段范围、按钮或报告状态不符合契约。
     """
     service = FakeWriteService()
-    app = _app(tmp_path, service).run()
+    admin = _admin_service(service, release_worker=False)
+    app = _app(tmp_path, service, host_admin_service=admin).run()
     try:
         app.button[0].click().run()
         assert not app.exception and app.button[0].disabled
+        assert service.registered.wait(_TIMEOUT)
         assert len(service.requests) == 1
+        if cancelled:
+            app.button[1].click().run()
+            assert app.button[1].disabled
         plan = _ReportFragmentPlan(workspace=tmp_path, service=service)
         app.session_state[_PLAN_KEY] = plan
         monkeypatch.setattr(app_test_module, "LocalScriptRunner", _ReportFragmentScriptRunner)
@@ -108,6 +120,7 @@ def test_report_terminal_fragment_updates_result_and_controls_without_full_rerun
 
         assert not app.exception
         assert plan.initial_button_disabled is True
+        assert plan.initial_cancel_disabled is cancelled
         assert [event for _, event in plan.runs] == [
             ScriptRunnerEvent.SCRIPT_STOPPED_WITH_SUCCESS,
             ScriptRunnerEvent.FRAGMENT_STOPPED_WITH_SUCCESS,
@@ -116,9 +129,14 @@ def test_report_terminal_fragment_updates_result_and_controls_without_full_rerun
         assert initial_scope == () and len(final_scope) == 1
         assert plan.auto_reruns == [(final_scope[0], _POLL_SECONDS)]
         assert not app.button[0].disabled
-        assert any("报告生成完成" in notice.value for notice in app.success)
-        assert any(_REPORT == element.value for element in app.markdown)
-        assert len(app.get("download_button")) == 1
+        assert [button.label for button in app.button] == ["生成报告"]
+        if cancelled:
+            assert any("已取消" in notice.value for notice in app.info)
+            assert not app.get("download_button")
+        else:
+            assert any("报告生成完成" in notice.value for notice in app.success)
+            assert any(_REPORT == element.value for element in app.markdown)
+            assert len(app.get("download_button")) == 1
         assert len(service.requests) == 1
     finally:
         service.release.set()
