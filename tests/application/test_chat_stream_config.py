@@ -23,8 +23,7 @@ def test_missing_config_keeps_ninety_seconds(run_config: StructuredConfigObject)
     """
     config = parse_chat_stream_config(run_config)
     assert config.first_chunk_timeout_seconds == 90.0
-    # Responses 通道在真实使用中首输出可达 90 秒以上，包内为其提供更长的等待窗口。
-    assert config.first_chunk_timeout_seconds_by_runner == {"openai_responses": 300.0}
+    assert config.first_chunk_timeout_seconds_by_runner == {}
     assert config.resolve_first_chunk_timeout_seconds("openai_responses") == 90.0
 
 
@@ -87,19 +86,24 @@ def test_invalid_container_reports_field(value: StructuredConfigValue, override:
         parse_chat_stream_config({"chat_stream_config": section})
 
 
-def test_packaged_default_does_not_enable_responses_override(tmp_path: Path) -> None:
-    """包内默认配置不能替用户启用 300 秒覆盖。
+def test_packaged_default_gives_responses_runner_a_longer_wait(tmp_path: Path) -> None:
+    """包内默认让 Responses 通道等 300 秒，其余 runner 仍是 90 秒。
+
+    依据：真实使用中 Responses 模型（Astra、Sol）的首输出可达 90 秒以上，
+    90 秒会误杀正常请求；通用默认仍保持 90 秒。
 
     Args:
         tmp_path: 无用户配置的隔离工作区。
     Returns:
         无。
     Raises:
-        AssertionError: 包内配置改变默认行为。
+        AssertionError: 包内默认阈值不符合预期。
     """
     config = parse_chat_stream_config(ConfigLoader(ConfigFileResolver(tmp_path)).load_run_config())
     assert config.first_chunk_timeout_seconds == 90.0
-    assert config.first_chunk_timeout_seconds_by_runner == {}
+    assert config.first_chunk_timeout_seconds_by_runner == {"openai_responses": 300.0}
+    assert config.resolve_first_chunk_timeout_seconds("openai_responses") == 300.0
+    assert config.resolve_first_chunk_timeout_seconds("openai_compatible") == 90.0
 
 
 @pytest.mark.parametrize("runner", ["", " ", " openai_responses", "openai_responses "])
