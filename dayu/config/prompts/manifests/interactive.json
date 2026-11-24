@@ -1,20 +1,15 @@
 {
   "scene": "interactive",
   "model": {
-    "default_name": "mimo-v2.5-pro-thinking-plan",
+    "default_name": "deepseek-v4-flash-thinking",
     "allowed_names": [
-      "openai-responses",
       "gpt-6-astra",
-      "mimo-v2.5-pro-thinking",
-      "mimo-v2.5-pro-thinking-plan",
-      "mimo-v2.5-pro-thinking-plan-sg",
+      "openai-responses",
       "deepseek-v4-flash-thinking",
       "deepseek-v4-pro-thinking",
-      "qwen-plus-thinking",
-      "ollama",
-      "gpt-5.4-thinking",
-      "claude-sonnet-4-6-thinking",
-      "gemini-2.5-flash-thinking"
+      "mimo-v2.5-pro-thinking",
+      "mimo-v2.5-pro-thinking-plan",
+      "mimo-v2.5-pro-thinking-plan-sg"
     ],
     "temperature_profile": "interactive"
   },

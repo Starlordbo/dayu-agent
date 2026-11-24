@@ -217,7 +217,7 @@ def test_interactive_manifest_excludes_doc_tools_by_default() -> None:
 
     manifest = load_scene_definition(FilePromptAssetStore(ConfigFileResolver()), "interactive")
 
-    assert manifest.model.default_name == "mimo-v2.5-pro-thinking-plan"
+    assert manifest.model.default_name == "deepseek-v4-flash-thinking"
     assert manifest.model.temperature_profile == "interactive"
     assert manifest.conversation.enabled is True
     assert manifest.tool_selection_policy.mode.value == "select"

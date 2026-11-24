@@ -82,18 +82,13 @@ _EXPECTED_THINKING_ALLOWED_NAMES: list[str] = [
 ]
 
 _EXPECTED_INTERACTIVE_ALLOWED_NAMES: list[str] = [
-    "openai-responses",
     "gpt-6-astra",
+    "openai-responses",
+    "deepseek-v4-flash-thinking",
+    "deepseek-v4-pro-thinking",
     "mimo-v2.5-pro-thinking",
     "mimo-v2.5-pro-thinking-plan",
     "mimo-v2.5-pro-thinking-plan-sg",
-    "deepseek-v4-flash-thinking",
-    "deepseek-v4-pro-thinking",
-    "qwen-plus-thinking",
-    "ollama",
-    "gpt-5.4-thinking",
-    "claude-sonnet-4-6-thinking",
-    "gemini-2.5-flash-thinking",
 ]
 
 _EXPECTED_CONVERSATION_COMPACTION_ALLOWED_NAMES: list[str] = [
@@ -129,7 +124,7 @@ _EXPECTED_WRITE_ALLOWED_NAMES: list[str] = [
 @pytest.mark.parametrize(
     ("scene_name", "expected_default", "expected_allowed_names"),
     [
-        ("interactive", "mimo-v2.5-pro-thinking-plan", _EXPECTED_INTERACTIVE_ALLOWED_NAMES),
+        ("interactive", "deepseek-v4-flash-thinking", _EXPECTED_INTERACTIVE_ALLOWED_NAMES),
         ("write", "mimo-v2.5-pro-plan", _EXPECTED_WRITE_ALLOWED_NAMES),
     ],
 )
@@ -677,7 +672,7 @@ def test_write_and_regenerate_prompts_require_separate_reader_facing_bullet_labe
 
 @pytest.mark.unit
 def test_load_scene_manifest_reads_interactive_manifest() -> None:
-    """验证交互场景包含固定 Astra 选项且保持原默认模型。
+    """验证交互场景的默认模型与精简后的可选清单。
 
     Args:
         无。
@@ -691,7 +686,7 @@ def test_load_scene_manifest_reads_interactive_manifest() -> None:
     manifest = store.load_scene_manifest("interactive")
 
     assert manifest["scene"] == "interactive"
-    assert manifest["model"]["default_name"] == "mimo-v2.5-pro-thinking-plan"
+    assert manifest["model"]["default_name"] == "deepseek-v4-flash-thinking"
     assert manifest["model"]["allowed_names"] == _EXPECTED_INTERACTIVE_ALLOWED_NAMES
     assert manifest["model"]["temperature_profile"] == "interactive"
     assert _require_conversation(manifest)["enabled"] is True
