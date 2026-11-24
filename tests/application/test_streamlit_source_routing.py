@@ -116,6 +116,7 @@ class _DetailRecorder:
         self, selected_stock: WatchlistItem, workspace_root: Path,
         fins_service: FinsServiceProtocol, chat_service: ChatServiceProtocol,
         write_service: WriteServiceProtocol, model_names: tuple[str, ...] = (),
+        report_model_names: tuple[str, ...] = (),
     ) -> None:
         """记录详情页注入参数，不提交聊天或财报命令。
 
@@ -125,7 +126,8 @@ class _DetailRecorder:
             fins_service: 真实构造的财报服务。
             chat_service: 真实构造的聊天服务。
             write_service: 真实构造的写作服务。
-            model_names: 场景允许且已配置的模型名。
+            model_names: 对话场景允许且已配置的模型名。
+            report_model_names: 报告场景允许且已配置的模型名。
         返回值:
             无。
         异常:

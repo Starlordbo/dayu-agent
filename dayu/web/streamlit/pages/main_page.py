@@ -61,6 +61,7 @@ def render_stock_detail_page(
     chat_service: ChatServiceProtocol,
     write_service: WriteServiceProtocol,
     model_names: tuple[str, ...] = (),
+    report_model_names: tuple[str, ...] = (),
 ) -> None:
     """渲染股票详情页面（选中自选股后展示）。
 
@@ -70,7 +71,8 @@ def render_stock_detail_page(
         fins_service: 财报服务协议实例。
         chat_service: 聊天服务协议实例。
         write_service: 写作服务协议实例。
-        model_names: 可选择的对话及报告模型名称。
+        model_names: 可选择的对话模型名称（interactive 场景）。
+        report_model_names: 可选择的报告模型名称（write 场景）。
 
     返回值:
         无。
@@ -108,7 +110,7 @@ def render_stock_detail_page(
             selected_stock=selected_stock,
             workspace_root=workspace_root,
             write_service=write_service,
-            model_names=model_names,
+            model_names=report_model_names,
         )
 
     with tabs[3]:

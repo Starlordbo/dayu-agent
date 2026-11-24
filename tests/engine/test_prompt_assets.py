@@ -135,6 +135,9 @@ _EXPECTED_CONVERSATION_COMPACTION_ALLOWED_NAMES: list[str] = [
 
 _EXPECTED_WRITE_ALLOWED_NAMES: list[str] = [
     "openai-responses",
+    "gpt-6-astra",
+    "gpt-6-sol",
+    "deepseek-v4-flash-thinking",
     "mimo-v2.5-pro",
     "mimo-v2.5-pro-plan",
     "mimo-v2.5-pro-plan-sg",
@@ -153,7 +156,7 @@ _EXPECTED_WRITE_ALLOWED_NAMES: list[str] = [
     ("scene_name", "expected_default", "expected_allowed_names"),
     [
         ("interactive", "deepseek-v4-flash-thinking", _EXPECTED_INTERACTIVE_ALLOWED_NAMES),
-        ("write", "mimo-v2.5-pro-plan", _EXPECTED_WRITE_ALLOWED_NAMES),
+        ("write", "deepseek-v4-flash-thinking", _EXPECTED_WRITE_ALLOWED_NAMES),
     ],
 )
 def test_package_scene_models_are_isolated_from_workspace_overrides(
@@ -881,7 +884,7 @@ def test_write_scene_manifest_loads_fact_rules_fragment() -> None:
     manifest = store.load_scene_manifest("write")
 
     fragment_ids = {fragment["id"] for fragment in manifest["fragments"]}
-    assert manifest["model"]["default_name"] == "mimo-v2.5-pro-plan"
+    assert manifest["model"]["default_name"] == "deepseek-v4-flash-thinking"
     assert manifest["model"]["allowed_names"] == _EXPECTED_WRITE_ALLOWED_NAMES
     assert manifest["model"]["temperature_profile"] == "write"
     assert _require_runtime_agent_max_iterations(manifest) == 32

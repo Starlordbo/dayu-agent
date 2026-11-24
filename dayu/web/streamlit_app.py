@@ -217,13 +217,23 @@ def main() -> None:
         render_welcome_page()
     elif prepared_deps is not None:
         fins_service, chat_service, write_service = _resolve_services(prepared_deps)
+        preparer = prepared_deps.scene_execution_acceptance_preparer
+        catalog_names = tuple(preparer.model_catalog.load_models())
+        # 对话与报告是两个不同场景，各自的可选模型必须按各自 manifest 的 allowed_names 过滤。
+        chat_model_names = tuple(
+            name for name in catalog_names if name in preparer.read_scene_definition("interactive").model.allowed_names
+        )
+        report_model_names = tuple(
+            name for name in catalog_names if name in preparer.read_scene_definition("write").model.allowed_names
+        )
         render_stock_detail_page(
             selected_stock=selected_stock,
             workspace_root=workspace_root,
             fins_service=fins_service,
             chat_service=chat_service,
             write_service=write_service,
-            model_names=tuple(name for name in prepared_deps.scene_execution_acceptance_preparer.model_catalog.load_models() if name in prepared_deps.scene_execution_acceptance_preparer.read_scene_definition("interactive").model.allowed_names),
+            model_names=chat_model_names,
+            report_model_names=report_model_names,
         )
     else:
         st.error("财报服务不可用，无法展示股票详情。请检查配置后刷新页面。")

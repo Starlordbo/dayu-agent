@@ -1,9 +1,12 @@
 {
   "scene": "write",
   "model": {
-    "default_name": "mimo-v2.5-pro-plan",
+    "default_name": "deepseek-v4-flash-thinking",
     "allowed_names": [
       "openai-responses",
+      "gpt-6-astra",
+      "gpt-6-sol",
+      "deepseek-v4-flash-thinking",
       "mimo-v2.5-pro",
       "mimo-v2.5-pro-plan",
       "mimo-v2.5-pro-plan-sg",
