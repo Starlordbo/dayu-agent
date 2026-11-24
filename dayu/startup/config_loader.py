@@ -8,6 +8,7 @@ prompt 目录结构与 prompt 资产读取不再由本模块负责。
 """
 
 from copy import deepcopy
+from functools import partial
 import os
 import re
 from collections.abc import Iterable
@@ -21,6 +22,7 @@ from dayu.log import Log
 
 MODULE = "CONFIG"
 _ENV_VAR_PATTERN = re.compile(r"\{\{([A-Z_][A-Z0-9_]*)\}\}")
+_UNRESOLVED_ENV_VAR_PATTERN = re.compile(r"\{\{([^{}]*)\}\}")
 _ENV_VAR_SCAN_FILE_SUFFIXES = frozenset({".json", ".yaml", ".yml"})
 
 
@@ -166,25 +168,72 @@ def _require_structured_config_object(
     return cast(StructuredConfigObject, payload)
 
 
-def _replace_model_config_env_vars(value: ModelConfigJsonValue) -> ModelConfigJsonValue:
-    """递归替换模型配置中的环境变量占位符。
+def _replace_required_model_env_var(match: re.Match[str], *, model_name: str) -> str:
+    """替换已选模型引用的环境变量，并拒绝不可用值。
+
+    Args:
+        match: 环境变量占位符匹配结果。
+        model_name: 当前加载的模型配置条目名。
+
+    Returns:
+        非空且非纯空白的环境变量原值。
+
+    Raises:
+        ValueError: 环境变量未设置、为空串或纯空白时抛出。
+    """
+
+    env_var = match.group(1)
+    value = os.environ.get(env_var)
+    if value is None or not value.strip():
+        raise ValueError(
+            f"llm_models.json 配置条目 '{model_name}' 引用的环境变量 '{env_var}' "
+            "未设置或为空白；请在启动 Dayu 的环境中将该变量设置为有效值后重试。"
+        )
+    return value
+
+
+def _replace_model_config_env_vars(
+    value: ModelConfigJsonValue,
+    *,
+    model_name: str,
+) -> ModelConfigJsonValue:
+    """递归替换已选模型的环境变量，并拒绝替换后残留的占位符。
 
     Args:
         value: 模型配置 JSON 值。
+        model_name: 当前加载的模型配置条目名。
 
     Returns:
         完成环境变量替换后的模型配置 JSON 值。
 
     Raises:
-        无。
+        ValueError: 变量不可用或替换后仍存在占位符时抛出。
     """
 
     if isinstance(value, dict):
-        return {key: _replace_model_config_env_vars(item) for key, item in value.items()}
+        return {
+            key: _replace_model_config_env_vars(item, model_name=model_name)
+            for key, item in value.items()
+        }
     if isinstance(value, list):
-        return [_replace_model_config_env_vars(item) for item in value]
+        return [_replace_model_config_env_vars(item, model_name=model_name) for item in value]
     if isinstance(value, str):
-        return re.sub(_ENV_VAR_PATTERN, _env_var_replacer, value)
+        replaced = _ENV_VAR_PATTERN.sub(
+            partial(_replace_required_model_env_var, model_name=model_name), value
+        )
+        # 仅执行一轮替换；变量值中的二次模板或未知占位符不能进入模型请求。
+        unresolved_names = {
+            match.group(1) for match in _UNRESOLVED_ENV_VAR_PATTERN.finditer(replaced)
+        }
+        if unresolved_names:
+            referenced_names = set(_extract_env_var_names_from_text(value))
+            variable_names = ", ".join(sorted(referenced_names | unresolved_names))
+            raise ValueError(
+                f"llm_models.json 配置条目 '{model_name}' 的环境变量 '{variable_names}' "
+                "替换后仍含未解析占位符；请检查该条目的变量名，并在启动 Dayu 的环境中"
+                "将变量设置为不含占位符的有效值后重试。"
+            )
+        return replaced
     return value
 
 
@@ -312,6 +361,7 @@ class ConfigLoader:
             FileNotFoundError: 配置文件不存在
             json.JSONDecodeError: JSON 格式错误
             KeyError: 模型名称不存在
+            ValueError: 引用变量未设置、为空白、替换后仍有占位符，或运行器被禁用。
         """
         models = self.load_llm_models()
         if model_name not in models:
@@ -325,7 +375,9 @@ class ConfigLoader:
 
         model_config = cast(
             ModelConfig,
-            _replace_model_config_env_vars(cast(ModelConfigJsonValue, models[model_name])),
+            _replace_model_config_env_vars(
+                cast(ModelConfigJsonValue, models[model_name]), model_name=model_name
+            ),
         )
         ensure_runner_type_enabled(model_config.get("runner_type"))
         return cast(ModelConfig, model_config)

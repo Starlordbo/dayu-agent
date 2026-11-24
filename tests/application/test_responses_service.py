@@ -139,11 +139,12 @@ async def test_real_service_roundtrip_and_restart(tmp_path: Path, monkeypatch: p
     assert len(posts) == 4
 
 
-def test_write_scene_default_and_both_overrides(tmp_path: Path) -> None:
+def test_write_scene_default_and_both_overrides(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """验证报告默认值与主写作、核查两组显式覆盖，全部使用真实场景配置。
 
     Args:
         tmp_path: 隔离工作区。
+        monkeypatch: 为离线路由测试提供独立的模型环境变量。
     Returns:
         无。
     Raises:
@@ -159,6 +160,10 @@ def test_write_scene_default_and_both_overrides(tmp_path: Path) -> None:
         log_module="TEST",
     )
     preparer = deps.scene_execution_acceptance_preparer
+    # 路由解析会加载所选模型，测试需满足配置契约，不能依赖开发机的供应商凭据。
+    loader = deps.workspace.config_loader
+    for env_name in loader.collect_model_referenced_env_vars(loader.load_llm_models()):
+        monkeypatch.setenv(env_name, "offline-test")
     default = _resolve_write_scene_models(
         scene_execution_acceptance_preparer=preparer, main_execution_options=None, audit_execution_options=None
     )

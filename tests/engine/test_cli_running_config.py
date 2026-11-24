@@ -3455,7 +3455,27 @@ def test_main_prompt_path_propagates_cli_options_to_mock_agent(
     ]
 
 
+@pytest.fixture
+def _offline_builtin_model_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """为使用内置模型目录的离线 CLI 配置测试提供独立有效变量。
+
+    Args:
+        monkeypatch: 测试结束后自动恢复环境变量的隔离工具。
+
+    Returns:
+        无。
+
+    Raises:
+        OSError: 内置模型配置读取失败时抛出。
+    """
+
+    loader = ConfigLoader(ConfigFileResolver())
+    for variable_name in loader.collect_model_referenced_env_vars(loader.load_llm_models()):
+        monkeypatch.setenv(variable_name, "offline-test")
+
+
 @pytest.mark.unit
+@pytest.mark.usefixtures("_offline_builtin_model_env")
 def test_main_prompt_path_sparse_override_preserves_run_json_base(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -3507,7 +3527,6 @@ def test_main_prompt_path_sparse_override_preserves_run_json_base(
     web_tools_recorder = _WebToolsRegistrationRecorder()
     doc_tools_recorder = _DocToolsRegistrationRecorder()
     fins_read_tools_recorder = _FinsReadToolsRegistrationRecorder()
-    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
 
     # CLI 只覆盖少数字段
     monkeypatch.setattr(
@@ -3555,6 +3574,7 @@ def test_main_prompt_path_sparse_override_preserves_run_json_base(
 
 
 @pytest.mark.unit
+@pytest.mark.usefixtures("_offline_builtin_model_env")
 def test_main_prompt_path_propagates_execution_permissions_to_web_tool_registration(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -3592,7 +3612,6 @@ def test_main_prompt_path_propagates_execution_permissions_to_web_tool_registrat
     web_tools_recorder = _WebToolsRegistrationRecorder()
     doc_tools_recorder = _DocToolsRegistrationRecorder()
     fins_read_tools_recorder = _FinsReadToolsRegistrationRecorder()
-    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
 
     monkeypatch.setattr(
         sys,
@@ -3653,6 +3672,7 @@ def test_main_prompt_path_propagates_execution_permissions_to_web_tool_registrat
 
 
 @pytest.mark.unit
+@pytest.mark.usefixtures("_offline_builtin_model_env")
 def test_main_prompt_path_propagates_run_json_defaults_to_host_and_agent(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -3721,7 +3741,6 @@ def test_main_prompt_path_propagates_run_json_defaults_to_host_and_agent(
     web_tools_recorder = _WebToolsRegistrationRecorder()
     doc_tools_recorder = _DocToolsRegistrationRecorder()
     fins_read_tools_recorder = _FinsReadToolsRegistrationRecorder()
-    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
 
     monkeypatch.setattr(
         sys,

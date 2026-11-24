@@ -1277,6 +1277,8 @@ dayu-render workspace/draft/AAPL/AAPL_qual_report.md report.html
 - `supports_tool_calling`：是否支持工具调用。用于 `prompt`、`interactive`、`write` 的模型通常需要支持。
 - `max_context_tokens`：模型可用上下文上限。
 
+加载选中的模型时，`{{ENV_VAR}}` 引用的变量必须已设置且非空白，替换结果也不能残留占位符。配置错误会在请求发出前提示条目名、变量名和修复方式；模型列表中的其他供应商无需全部配置。修改环境变量后，请让运行 Dayu 的进程使用新环境再重试。
+
 `runtime_hints.temperature_profiles` 里最常看到的是 `temperature`：
 
 - `temperature` 越低，输出通常越稳、更保守

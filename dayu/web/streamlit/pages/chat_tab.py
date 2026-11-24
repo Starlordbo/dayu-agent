@@ -32,7 +32,6 @@ from dayu.web.streamlit.pages.chat.utils import (
     build_chat_session_id,
     build_request_trace_id,
     normalize_stream_text_for_markdown,
-    should_keep_current_frame_for_side_effects,
     summarize_user_text,
 )
 
@@ -47,6 +46,7 @@ _THINKING_EXPANDER_TITLE = "思考内容"
 _USER_MESSAGE_COLUMN_SPEC: list[int] = [1, 3]
 _ASSISTANT_MESSAGE_COLUMN_SPEC: list[int] = [4, 1]
 _FILTERED_INFO_MESSAGE = "本轮输出触发内容过滤，结果可能不完整。"
+_TERMINAL_FEEDBACK_SUFFIX = "terminal_feedback"
 
 
 @dataclass(frozen=True)
@@ -209,6 +209,35 @@ def _render_stream_frame(*, title: str, state: ChatStreamFrameState, ticker: str
     )
 
 
+def _render_terminal_feedback(*, ticker: str, session_id: str) -> None:
+    """在整页刷新后重绘当前会话最近一轮的终态反馈。
+
+    参数:
+        ticker: 当前股票代码。
+        session_id: 当前会话身份，防止反馈串入同股票的其他会话。
+    返回值:
+        无。
+    异常:
+        无。
+    """
+    feedback = read_stream_frame_state(_build_state_key(ticker, _TERMINAL_FEEDBACK_SUFFIX))
+    if feedback is None or feedback.session_id != session_id:
+        return
+
+    has_answer = bool(normalize_stream_text_for_markdown(feedback.answer_text).strip())
+    # 失败的部分输出与纯思考不会进入成功历史，需与错误一起保留。
+    if feedback.error_message.strip() or not has_answer:
+        assistant_column, _ = st.columns(_ASSISTANT_MESSAGE_COLUMN_SPEC, gap="small")
+        with assistant_column:
+            with st.chat_message("assistant"):
+                _render_stream_frame(title=_THINKING_EXPANDER_TITLE, state=feedback, ticker=ticker)
+    if feedback.error_message.strip():
+        st.error(f"交互式分析执行失败：{feedback.error_message}")
+    elif not has_answer:
+        st.warning(_EMPTY_ASSISTANT_REPLY_WARNING)
+    present_stream_side_effects(feedback.side_messages, feedback.filtered_flags)
+
+
 def load_history_for_ticker(
     *,
     chat_service: ChatServiceProtocol,
@@ -342,6 +371,7 @@ def perform_clear_session_history(
         module=MODULE,
     )
     clear_chat_stream_runtime(ticker=ticker, stream_state_key=stream_state_key)
+    st.session_state.pop(_build_state_key(ticker, _TERMINAL_FEEDBACK_SUFFIX), None)
     st.session_state[message_state_key] = []
     st.session_state[input_key] = ""
     st.session_state[clear_input_key] = False
@@ -388,48 +418,36 @@ def _render_stream_polling_fragment(
         return
 
     trace_id = stream_state.trace_id
+    assistant_text = normalize_stream_text_for_markdown(stream_state.answer_text)
+    assistant_reasoning_text = normalize_stream_text_for_markdown(stream_state.reasoning_text)
     if stream_state.error_message.strip():
         Log.error(
             f"[{trace_id}] 交互式分析执行失败: {stream_state.error_message}",
             module=MODULE,
         )
-        st.error(f"交互式分析执行失败：{stream_state.error_message}")
-        clear_chat_stream_runtime(ticker=ticker, stream_state_key=stream_state_key)
-        return
-
-    assistant_text = normalize_stream_text_for_markdown(stream_state.answer_text)
-    assistant_reasoning_text = normalize_stream_text_for_markdown(stream_state.reasoning_text)
-    side_messages = stream_state.side_messages
-    filtered_flags = stream_state.filtered_flags
-
-    if not assistant_text.strip():
+    elif not assistant_text.strip():
         Log.warning(f"[{trace_id}] 回复完成但文本为空", module=MODULE)
-        st.warning(_EMPTY_ASSISTANT_REPLY_WARNING)
-    present_stream_side_effects(side_messages, filtered_flags)
-    if should_keep_current_frame_for_side_effects(assistant_text=assistant_text, side_messages=side_messages):
-        Log.warning(
-            f"[{trace_id}] 检测到空回复且存在副作用消息，保留当前页面帧展示错误，不执行 rerun",
-            module=MODULE,
+    else:
+        messages = _ensure_messages(message_state_key)
+        messages.append(
+            ChatMessage(
+                role="assistant",
+                content=assistant_text,
+                reasoning_content=assistant_reasoning_text,
+            )
         )
-        clear_chat_stream_runtime(ticker=ticker, stream_state_key=stream_state_key)
-        return
+        st.session_state[clear_input_key] = True
 
-    messages = _ensure_messages(message_state_key)
-    messages.append(
-        ChatMessage(
-            role="assistant",
-            content=assistant_text,
-            reasoning_content=assistant_reasoning_text,
-        )
-    )
+    # fragment 不能刷新片段外的提交按钮。先保存反馈，释放运行时后整页重绘，
+    # 既恢复可重试状态，又避免错误、警告和过滤信息因 rerun 消失。
+    st.session_state[_build_state_key(ticker, _TERMINAL_FEEDBACK_SUFFIX)] = stream_state
     Log.info(
         f"[{trace_id}] 交互式分析完成，准备 rerun: assistant_len={len(assistant_text)}, "
-        f"side_messages={len(side_messages)}, filtered={any(filtered_flags)}",
+        f"side_messages={len(stream_state.side_messages)}, filtered={any(stream_state.filtered_flags)}",
         module=MODULE,
     )
-    st.session_state[clear_input_key] = True
     clear_chat_stream_runtime(ticker=ticker, stream_state_key=stream_state_key)
-    st.rerun()
+    st.rerun(scope="app")
 
 
 def _format_model_choice(model_name: str) -> str:
@@ -481,6 +499,7 @@ def render_chat_tab(
         if st.button("新建会话", key=_build_state_key(ticker, "new_session"), disabled=bool(stream_state and not stream_state.done)):
             st.query_params[session_query_key] = uuid.uuid4().hex
             clear_chat_stream_runtime(ticker=ticker, stream_state_key=stream_state_key)
+            st.session_state.pop(_build_state_key(ticker, _TERMINAL_FEEDBACK_SUFFIX), None)
             st.session_state[message_state_key] = []
             st.rerun()
     messages = _ensure_messages(message_state_key)
@@ -531,6 +550,7 @@ def render_chat_tab(
             st.markdown(_WELCOME_MARKDOWN)
         else:
             _render_message_history(messages, ticker=ticker)
+        _render_terminal_feedback(ticker=ticker, session_id=session_id)
         if stream_state is not None:
             _render_stream_polling_fragment(
                 ticker=ticker,
@@ -572,6 +592,7 @@ def render_chat_tab(
             Log.warning(f"[{trace_id}] 提交被拒绝：服务未初始化", module=MODULE)
             st.warning(_MISSING_SERVICE_WARNING)
             return
+        st.session_state.pop(_build_state_key(ticker, _TERMINAL_FEEDBACK_SUFFIX), None)
         messages.append(ChatMessage(role="user", content=normalized_user_text))
         Log.info(
             f"[{trace_id}] 开始请求流式回复: ticker={ticker}, session_id={session_id}",

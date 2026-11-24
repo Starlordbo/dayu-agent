@@ -36,6 +36,7 @@
 
 - Streamlit/FastAPI 都必须通过 `ServiceProtocol` 访问业务能力，不绕过 Service 直连 Host 内部对象。
 - 聊天历史读取与清空走 `ChatServiceProtocol` 的公开方法，不在 UI 侧直接读写 archive。
+- 流式轮询进入终态后先在页面会话状态中保存反馈，再清理运行时并整页刷新，让片段外的提交按钮恢复可用。执行错误、空回复、警告与内容过滤提示会在对话区重绘；失败或空回复保留输入，成功回复清空输入。反馈仅用于当前会话，下一次有效提交、成功清空或新建会话时清除，不写入后端历史。
 - 无显式会话参数时使用公司级默认键（`streamlit-web-{COMPANY_ID}`）；URL 中的 `chat_tab_<ticker>_session` 优先恢复原会话，即使当前可选模型目录为空也不退回公司默认会话。
 - 自选股持久化边界由 `tests/application/test_streamlit_watchlist.py` 守护。
 

@@ -134,9 +134,10 @@ pip install -r requirements.txt
 - `test_web_routes.py` 还要守住 Web 的客户端错误语义：像 `PromptService.submit()`、`ChatService.resume_pending_turn()` 这类已经在 Service 边界同步抛出的 `ValueError/KeyError`，router 必须映射成对应 `4xx`，且 `/api/chat/resume` 只能在 resume 成功后才创建后台消费任务，不能漏成 `500` 或先受理后失败。
 - `test_web_routes.py` 还要守住 `/api/write` 的未支持语义：当 Web 当前不支持在线写作时，route 必须显式返回 `501`，不能再用 `202` / `accepted=true` 伪装成已受理。
 - `test_streamlit_watchlist.py` 负责守住 Streamlit 自选股组件的本地持久化与表格合并边界：`workspace/.dayu/streamlit/watchlist.json` 读写、删除/编辑/新增合并、必填校验与 ticker 去重语义不能漂移。
-- `test_streamlit_chat_utils.py` 负责守住 `chat/utils.py` 的 session/trace 标识生成、流式文本提取与 Markdown 归一、事件折叠与副作用判定等纯函数语义。
+- `test_streamlit_chat_utils.py` 负责守住 `chat/utils.py` 的 session/trace 标识生成、流式文本提取与 Markdown 归一，以及事件折叠保留副作用消息等纯函数语义。
 - `test_streamlit_chat_stream_runtime.py` 负责守住 `chat/stream_runtime.py` 的首 chunk 超时、chunk 间超时、取消传播、worker 退出后 trailing event 消费与 error 事件收口语义。
 - `test_streamlit_chat_tab.py` 负责守住 `chat_tab.py` 中 `ChatMessage` 稳定语义、`load_history_for_ticker` 的历史轮次映射与 fail-soft（空结果/异常）语义，以及 `perform_clear_session_history` 对 `KeyError / Rejected / Stale(含静默重试) / PartiallyApplied / 重试失败` 的 UI 分支语义。
+- `tests/engine/test_config_loader_failfast.py` 负责守住单模型加载拒绝缺失、空白及残留占位符，目录枚举保留未使用模型模板，诊断不回显变量值；`tests/application/test_llm_config_failfast.py` 通过真实 UI worker 和 Service 验证失败时零 HTTP、错误终态投递，以及修复变量后经 Host/Agent/Runner 重试成功。纯路由和 CLI 配置测试也必须为实际加载的模型提供有效的独立测试变量，不依赖开发机凭据。
 - `test_fins_service.py`、`test_sec_process_workflow.py`、`test_sec_pipeline_process_filing_source.py`、`test_cn_pipeline_process.py` 与 `test_tool_snapshot_export.py` 还要共同守住 Fins 取消传播链路：`Host` 的取消状态只能以窄 `cancel_checker` 形式从 `FinsService -> FinsRuntime -> Pipeline` 下传；同步 `process_filing/process_material` 与已支持取消协作的流式 `download/process` 都必须在阶段边界及时抛出 `CancelledError` 或收口为 cancelled，不能等 direct operation 整体结束后才统一收口。
 - `test_sec_pipeline_process_filing_source.py` 还要继续守住 snapshot 导出后的仓储可发现性：当 `tool_snapshot_*.json` 已成功写入 `processed/{document_id}` 时，`FsProcessedDocumentRepository.list_processed_documents()` 必须能同步发现该文档，不能再出现“目录里有 snapshot、manifest 里没有登记”的漂移。
 - `test_host_admin_service.py` 负责守住宿主管理面已经收口到 `HostAdminService`，避免 Web / CLI 管理面重新直接触碰 Host。
@@ -561,6 +562,8 @@ DAYU_RUN_LIVE_API=1 EDGAR_LOCAL_DATA_DIR="$PWD/workspace/tmp/edgar" \
 - `tests/application/test_document_reference_service.py`：真实入库、重新装配后的目录、跨公司同编号隔离、删除/不完整状态、文档/章节范围、只读且零命令。必须保护 Docling 正文段落边界，禁止以宽松身份推断掩盖源文本损失。
 - `tests/application/test_streamlit_citations.py`：历史/流式/终态统一格式化，完整合法机器定位、分块输出、URL注入与代码块隔离。
 - `tests/application/test_streamlit_chat_render.py`：真实聊天 AppTest 控件及逐帧事件接线，检查用户文本不替换、历史/流式/终态来源均正确，保持会话参数；离线类型化 Service 不调用模型。
+  终态回归还覆盖错误、空回复、警告和内容过滤提示在整页重绘后保留，失败保留输入供重试，后续提交、清空及新建会话清理旧反馈，并防止跨会话误展示。
+- `tests/application/test_streamlit_chat_fragment.py`：在同一 AppTest runner 内投递真实自动 fragment 请求，验证 loading 整页 → 终态片段 → 整页重绘，直接断言片段外按钮恢复和终态反馈保留。仅扩展 Streamlit testing 的请求入口，不替代生产 fragment 或 rerun；升级 Streamlit 时需复核这个内部测试入口，不将普通整页 `app.run()` 等同于片段刷新。
 - `tests/application/test_material_tab_render.py` 与 `test_streamlit_source_viewer.py`：无头 AppTest 验证逐文件失败/重试、编辑/去重、持久目录、来源定位/连续目录选择/刷新和角色证据。只替代浏览器上传控件，不将 AppTest 声称为真实浏览器验收。
 - `tests/application/test_streamlit_source_routing.py`：执行真实 `main()`，守住来源先于侧栏路由、缺失依赖提示、启动准备与服务缓存边界；串联 MSFT 对话引用 AAPL → 实际查看器返回 URL → 全新 AppTest 的真实侧栏/主页面/聊天，验证无可选模型时仍恢复非默认原会话，不产生提交。
 - `tests/application/test_streamlit_navigation.py`：真实侧栏核对持久自选股、URL 优先于旧选股、失效/删除目标不回退、显式选择及管理入口；真实 Tab protobuf 默认索引覆盖合法与非法 `view`。这些不是浏览器点击/前进后退或实际焦点的证据。

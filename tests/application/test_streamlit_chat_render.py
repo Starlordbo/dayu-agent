@@ -415,13 +415,13 @@ def test_live_partial_marker_then_completed_frame_and_final_history(monkeypatch:
     _assert_assistant_citation(app)
 
 
-@pytest.mark.parametrize("kind", ["error", "side-message", "empty"])
+@pytest.mark.parametrize("kind", ["error", "side-message", "empty", "escaped-empty", "401", "400", "partial-error"])
 def test_stream_terminal_error_and_empty_answer_paths(monkeypatch: pytest.MonkeyPatch, kind: str) -> None:
-    """真实终态错误、带副作用的空回复和纯空回复走不同清理与展示分支。
+    """失败或空回复完成后重绘提示、恢复按钮并保留输入供重试。
 
     参数:
         monkeypatch: 隔离生产运行时注册表。
-        kind: 三种终态结果类别。
+        kind: 执行异常、副作用、空回复、不可重试 HTTP 错误或部分回答失败。
     返回值:
         无。
     异常:
@@ -430,26 +430,114 @@ def test_stream_terminal_error_and_empty_answer_paths(monkeypatch: pytest.Monkey
     service = _ChatService()
     app = _app(service)
     queue = _install_queue(app, monkeypatch)
-    if kind == "error":
+    app.run()
+    assert app.button(key="chat_tab_AAPL_send_button").disabled
+    assert "正在分析中" in app.button(key="chat_tab_AAPL_send_button").label
+    if kind in ("error", "partial-error"):
+        if kind == "partial-error":
+            queue.put(StreamQueueItem(done=False, chunk=_ANSWER))
         queue.put(StreamQueueItem(done=True, event_type="error", chunk="离线测试执行失败"))
     elif kind == "side-message":
         queue.put(StreamQueueItem(done=False, event_type="side_message", chunk="材料不足，请补充原文"))
         queue.put(StreamQueueItem(done=False, event_type="filtered", flag=True))
+    elif kind in ("401", "400"):
+        queue.put(StreamQueueItem(done=False, event_type="side_message", chunk=f"HTTP {kind}：模型请求失败"))
+    elif kind == "escaped-empty":
+        queue.put(StreamQueueItem(done=False, chunk=r"\n"))
+        queue.put(StreamQueueItem(done=False, kind="reasoning", chunk=_REASONING))
     queue.put(StreamQueueItem(done=True, event_type="done"))
     app.run()
     assert not app.exception
     assert _STATE not in app.session_state and _TICKER not in CHAT_STREAM_RUNTIME_HANDLES
-    if kind == "error":
-        assert len(app.error) == 1 and "离线测试执行失败" in app.error[0].value
-        assert service.reads == []
-    elif kind == "side-message":
-        assert any("本轮未收到" in item.value for item in app.warning)
-        assert any("材料不足" in item.value for item in app.warning)
-        assert any("内容过滤" in item.value for item in app.info)
-        assert service.reads == []
+    assert service.reads == [(_SESSION, 50)]
+    # 再次整页重绘仍必须保留提示，不能只依赖终态 fragment 遗留的画面。
+    for _ in range(2):
+        assert not app.button(key="chat_tab_AAPL_send_button").disabled
+        assert "正在分析中" not in app.button(key="chat_tab_AAPL_send_button").label
+        assert not app.button(key="chat_tab_AAPL_new_session").disabled
+        assert app.text_area[0].value == "提交后应清空的问题"
+        if kind in ("error", "partial-error"):
+            assert len(app.error) == 1 and "离线测试执行失败" in app.error[0].value
+            if kind == "partial-error":
+                assert any("管理层尚未提供预测" in item.value for item in app.markdown)
+        else:
+            assert not app.error
+            assert any("本轮未收到" in item.value for item in app.warning)
+            if kind == "side-message":
+                assert any("材料不足" in item.value for item in app.warning)
+                assert any("内容过滤" in item.value for item in app.info)
+            elif kind in ("401", "400"):
+                assert any(f"HTTP {kind}" in item.value for item in app.warning)
+            elif kind == "escaped-empty":
+                assert any(_REASONING in item.value for item in app.markdown)
+        app.run()
+
+
+@pytest.mark.parametrize("action", ["retry", "clear", "new-session", "switch-session"])
+def test_terminal_feedback_does_not_leak_into_next_turn_or_session(
+    monkeypatch: pytest.MonkeyPatch, action: str,
+) -> None:
+    """真实按钮及会话切换不会将旧终态反馈带入后续轮次或其他会话。
+
+    参数:
+        monkeypatch: 隔离运行时注册表。
+        action: 重试、清空、新建或 URL 恢复其他会话。
+    返回值:
+        无。
+    异常:
+        AssertionError: 提示未清理、重试输入丢失或反馈串到其他会话。
+    """
+    service = _ChatService()
+    app = _app(service)
+    queue = _install_queue(app, monkeypatch)
+    queue.put(StreamQueueItem(done=True, event_type="error", chunk="需要修复配置"))
+    app.run()
+    app.run()
+    assert any("需要修复配置" in item.value for item in app.error)
+    if action == "retry":
+        app.button(key="chat_tab_AAPL_send_button").click().run()
+        runtime = CHAT_STREAM_RUNTIME_HANDLES.get(_TICKER)
+        if runtime is not None:
+            runtime.worker.join(timeout=5)
+            assert not runtime.worker.is_alive()
+            app.run()
+        assert len(service.submissions) == 1
+        assert service.submissions[0].user_text == "提交后应清空的问题"
+    elif action == "clear":
+        app.button(key="chat_tab_AAPL_clear_button").click().run()
+        assert service.clears == [_SESSION]
+    elif action == "new-session":
+        app.button(key="chat_tab_AAPL_new_session").click().run()
     else:
-        assert not app.error and app.text_area[0].value == ""
-        assert service.reads == [(_SESSION, 50)]
+        app.query_params["chat_tab_AAPL_session"] = "another-session"
+        app.run()
+    assert not app.exception and not app.error and not app.warning and not app.info
+
+
+def test_successful_answer_preserves_side_messages_after_rerun(monkeypatch: pytest.MonkeyPatch) -> None:
+    """有正文的成功回复也需在历史重绘后保留警告与过滤提示。
+
+    参数:
+        monkeypatch: 隔离运行时注册表。
+    返回值:
+        无。
+    异常:
+        AssertionError: 正文重复、提示丢失或成功后输入未清空。
+    """
+    service = _ChatService(histories={_SESSION: [_turn()]})
+    app = _app(service)
+    queue = _install_queue(app, monkeypatch)
+    queue.put(StreamQueueItem(done=False, chunk=_ANSWER))
+    queue.put(StreamQueueItem(done=False, event_type="side_message", chunk="部分材料不可用"))
+    queue.put(StreamQueueItem(done=False, event_type="filtered", flag=True))
+    queue.put(StreamQueueItem(done=True, event_type="done"))
+    app.run()
+    app.run()
+    assert not app.exception and not app.error
+    assert len(app.chat_message) == 2
+    assert any("部分材料不可用" in item.value for item in app.warning)
+    assert any("内容过滤" in item.value for item in app.info)
+    assert app.text_area[0].value == ""
 
 
 def test_submit_uses_real_worker_and_service_events_without_model() -> None:
