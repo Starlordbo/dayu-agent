@@ -126,10 +126,19 @@ SUCCEEDED FAILED    CANCELLED       UNSETTLED
 
 **取消的两层语义**（稳定契约）：
 
-- **取消意图**：`CancellationToken` 被设置；运行中的 Agent 会在下一个 checkpoint 看到并主动退出。
+- **取消意图**：`Host.cancel_run(run_id)` 写入该 run 的取消请求；`CancellationBridge` 触发 Host 持有的执行令牌，准备阶段和 Agent 在取消边界退出。
 - **取消终态**：`Run.state = CANCELLED` 被落库。两者时间点可分离——intent 可以立即设置，但终态由实际退出路径写入。
 
 `CancellationBridge` 桥接引擎回调与 Host 取消链；`RunDeadlineWatcher` 在 timeout 到点时设置 intent，然后依赖同一路径走到终态。
+
+**首事件前身份与取消确认**（`run_agent_stream` 稳定契约）：
+
+- `run_agent_stream` 的返回流在注册 run 后先返回 `AppEventType.RUN_STARTED`（调用方的启动通知，不向事件总线发布），其 `payload["run_id"]` 是本次运行身份；通知先于并发 permit 等待及 scene preparation，不计作模型输出，也不使用投递 metadata 关联请求。
+- `cancel_run` 返回当前运行记录（已终态时不再写取消意图），不代表执行已退出。调用方须继续消费事件流：准备/Runner 子任务停止后，Host 写终态及 `completed_at`，调和 pending turn，再释放 permit、deadline watcher 与 cancellation bridge。收到 `CANCELLED` 并耗尽事件流后，才可确认运行已经取消并收尾。
+- 准备器使用 `HostedRunContext.cancellation_token`；同步压缩的 `prepare_transcript(..., cancellation_token=...)` 同样响应取消，等待压缩子任务退出后抛领域 `CancelledError`，不写回取消中的压缩结果。
+- 自然成功与取消以数据库写事务的先后为准：成功先落库则取消请求无效；取消意图先落库则后续 `complete_run` 收敛为 `CANCELLED`。既有终态和 `completed_at` 不重复写入。
+- 聊天 Service 在等待 session 锁且尚无 run 时取消，只撤回本次等待；不创建 run，不释放其他提交持有的锁，也不批量取消同 session 的运行。
+
 
 **Bridge 失败降级**：底层 `RunRegistry.get_run` 持续抛出非预期异常时，bridge 会按
 `failure_grace_period_seconds / poll_interval_seconds` 推导连续失败阈值（至少为 1），
@@ -740,7 +749,7 @@ Host 的事件订阅面是 Service → UI 流的中继点：
 
 ### 14.6 取消、超时、Resume 的上游语义
 
-- **取消**：Service 调 `cancel_run(run_id, reason=USER_CANCELLED)`；Host 异步推进到 CANCELLED 终态。**不要**自己维护 run 生命周期。
+- **取消**：Service 调 `cancel_run(run_id)`；Host 异步推进到 CANCELLED 终态，耗尽事件流后确认资源已收尾。**不要**自己维护 run 生命周期。
 - **Session 级关停**：调 `cancel_session`；Host 内部按 §4 三步顺序执行，无需 Service 配合清理。
 - **超时**：Service 不自己看表；在提交 run 时把 deadline 作为执行选项传下去，由 Host 的 deadline watcher 负责。
 - **Resume**：总是走 `acquire_resume_lease → 基于 pending turn 重新起 run → release_resume_lease`；**acquire 失败按 §14.4 分流**。

@@ -15,6 +15,7 @@ from typing import Literal, TypeAlias
 import streamlit as st
 
 from dayu.contracts.events import AppEvent, AppEventType
+from dayu.contracts.cancellation import CancellationToken
 from dayu.log import Log
 from dayu.execution.options import ExecutionOptions
 from dayu.services.contracts import ChatTurnRequest, SessionResolutionPolicy
@@ -32,6 +33,8 @@ _SCENE_NAME_INTERACTIVE = "interactive"
 _STREAM_CHUNK_TIMEOUT_SECONDS = 45.0
 _STREAM_TIMEOUT_MESSAGE = "等待模型后续输出超时，请稍后重试。"
 _STREAM_EVENT_BATCH_LIMIT = 256
+_STREAM_CANCELLED_MESSAGE = "本次运行已取消"
+_STREAM_CANCELLED_BEFORE_RUN_MESSAGE = "本次请求已取消（尚未启动运行）"
 
 
 @dataclass(frozen=True)
@@ -41,7 +44,7 @@ class StreamQueueItem:
     done: bool
     kind: Literal["content", "reasoning"] = "content"
     chunk: str = ""
-    event_type: Literal["chunk", "side_message", "filtered", "error", "done"] = "chunk"
+    event_type: Literal["chunk", "side_message", "filtered", "error", "cancelled", "done"] = "chunk"
     flag: bool = False
 
 
@@ -77,7 +80,7 @@ class ChatStreamRuntimeHandle:
 
     worker: threading.Thread
     event_queue: Queue[ChatStreamEvent]
-    cancel_event: threading.Event
+    cancellation_token: CancellationToken
     started_at: float
     last_chunk_at: float
     has_received_chunk: bool
@@ -94,7 +97,7 @@ async def consume_chat_event_stream(
     session_id: str | None,
     ticker: str,
     event_queue: Queue[ChatStreamEvent],
-    cancel_event: threading.Event,
+    cancellation_token: CancellationToken,
     trace_id: str,
     model_name: str | None = None,
 ) -> None:
@@ -106,7 +109,7 @@ async def consume_chat_event_stream(
         session_id: 当前会话标识，首次可为 ``None``。
         ticker: 股票代码。
         event_queue: 线程安全队列，用于向主线程投递流式事件。
-        cancel_event: 取消信号事件；主线程设置后协程应尽快退出。
+        cancellation_token: 本次提交的取消信号；发出后继续消费，等待 Host 收尾。
         trace_id: 请求链路追踪标识。
         model_name: 可选模型选择，最终生效值由 Service 返回。
 
@@ -130,6 +133,7 @@ async def consume_chat_event_stream(
         scene_name=_SCENE_NAME_INTERACTIVE,
         execution_options=ExecutionOptions(model_name=model_name) if model_name else None,
         session_resolution_policy=SessionResolutionPolicy.ENSURE_DETERMINISTIC,
+        cancellation_token=cancellation_token,
     )
     submission = await chat_service.submit_turn(request)
     submit_elapsed_ms = int((time.perf_counter() - request_started_at) * 1000)
@@ -153,10 +157,8 @@ async def consume_chat_event_stream(
     error_count = 0
     cancelled_count = 0
     first_chunk_latency_ms: int | None = None
+    cancelled_before_run = False
     async for event in submission.event_stream:
-        if cancel_event.is_set():
-            Log.info(f"[{trace_id}] 收到取消信号，终止事件流消费", module=MODULE)
-            break
         buffered_events.append(event)
         if event.type == AppEventType.CONTENT_DELTA:
             content_delta_count += 1
@@ -168,8 +170,9 @@ async def consume_chat_event_stream(
             error_count += 1
         elif event.type == AppEventType.CANCELLED:
             cancelled_count += 1
+            cancelled_before_run = isinstance(event.payload, dict) and bool(event.payload.get("before_run", False))
 
-        if event.type in (AppEventType.CONTENT_DELTA, AppEventType.REASONING_DELTA):
+        if event.type in (AppEventType.CONTENT_DELTA, AppEventType.REASONING_DELTA) and not cancellation_token.is_cancelled():
             payload = event.payload
             chunk_text = extract_stream_text(payload) if isinstance(payload, (dict, str)) else ""
             if chunk_text:
@@ -193,8 +196,14 @@ async def consume_chat_event_stream(
                     )
                 )
 
+    # 只有耗尽 Service / Host 流后才能确认：此时 Host 的 finally 已完成。
+    if cancelled_count:
+        event_queue.put(StreamQueueItem(
+            done=False, event_type="cancelled",
+            chunk=_STREAM_CANCELLED_BEFORE_RUN_MESSAGE if cancelled_before_run else _STREAM_CANCELLED_MESSAGE,
+        ))
     folded_text, side_messages, filtered = fold_app_events_to_assistant_text(buffered_events)
-    if (not has_streamed_chunks) and folded_text:
+    if (not has_streamed_chunks) and folded_text and not cancellation_token.is_cancelled():
         event_queue.put(
             StreamQueueItem(
                 done=False,
@@ -237,7 +246,7 @@ def run_stream_worker(
     session_id: str | None,
     ticker: str,
     event_queue: Queue[ChatStreamEvent],
-    cancel_event: threading.Event,
+    cancellation_token: CancellationToken,
     trace_id: str,
     model_name: str | None = None,
 ) -> None:
@@ -249,7 +258,7 @@ def run_stream_worker(
         session_id: 当前会话标识，首次可为 ``None``。
         ticker: 股票代码。
         event_queue: 线程安全队列，用于向主线程投递流式事件。
-        cancel_event: 取消信号事件；接收后应尽快停止消费。
+        cancellation_token: 本次提交的取消信号；通过 Service 请求 Host 取消。
         trace_id: 请求链路追踪标识。
         model_name: 可选模型选择，最终生效值由 Service 返回。
 
@@ -268,7 +277,7 @@ def run_stream_worker(
                 session_id=session_id,
                 ticker=ticker,
                 event_queue=event_queue,
-                cancel_event=cancel_event,
+                cancellation_token=cancellation_token,
                 trace_id=trace_id,
                 model_name=model_name,
             )
@@ -353,7 +362,7 @@ def clear_chat_stream_runtime(*, ticker: str, stream_state_key: str) -> None:
     runtime = CHAT_STREAM_RUNTIME_HANDLES.pop(ticker, None)
     if runtime is not None:
         if runtime.worker.is_alive():
-            runtime.cancel_event.set()
+            runtime.cancellation_token.cancel()
             runtime.worker.join(timeout=0.1)
         else:
             runtime.worker.join()
@@ -391,7 +400,7 @@ def start_chat_stream_runtime(
 
     clear_chat_stream_runtime(ticker=ticker, stream_state_key=stream_state_key)
     event_queue: Queue[ChatStreamEvent] = Queue()
-    cancel_event = threading.Event()
+    cancellation_token = CancellationToken()
     worker = threading.Thread(
         target=run_stream_worker,
         kwargs={
@@ -400,7 +409,7 @@ def start_chat_stream_runtime(
             "session_id": session_id,
             "ticker": ticker,
             "event_queue": event_queue,
-            "cancel_event": cancel_event,
+            "cancellation_token": cancellation_token,
             "trace_id": trace_id,
             "model_name": model_name,
         },
@@ -410,7 +419,7 @@ def start_chat_stream_runtime(
     CHAT_STREAM_RUNTIME_HANDLES[ticker] = ChatStreamRuntimeHandle(
         worker=worker,
         event_queue=event_queue,
-        cancel_event=cancel_event,
+        cancellation_token=cancellation_token,
         started_at=started_at,
         last_chunk_at=started_at,
         has_received_chunk=False,
@@ -474,6 +483,9 @@ def poll_chat_stream_events(*, ticker: str, stream_state_key: str) -> ChatStream
         if event.event_type == "filtered":
             state.filtered_flags.append(event.flag)
             continue
+        if event.event_type == "cancelled":
+            state.error_message = f"{state.error_message}；{event.chunk}" if state.error_message else event.chunk
+            continue
         if event.event_type == "error":
             state.error_message = event.chunk or "交互式分析执行失败"
             state.done = True
@@ -482,7 +494,7 @@ def poll_chat_stream_events(*, ticker: str, stream_state_key: str) -> ChatStream
             state.done = True
 
     now = time.perf_counter()
-    if runtime.worker.is_alive() and (not state.done):
+    if runtime.worker.is_alive() and not state.done and not runtime.cancellation_token.is_cancelled():
         elapsed_since_start = now - runtime.started_at
         elapsed_since_chunk = now - runtime.last_chunk_at
         submission_info = runtime.submission_info
@@ -493,15 +505,13 @@ def poll_chat_stream_events(*, ticker: str, stream_state_key: str) -> ChatStream
             and submission_info is not None
             and elapsed_since_start >= submission_info.first_chunk_timeout_seconds
         ):
-            runtime.cancel_event.set()
-            state.done = True
+            runtime.cancellation_token.cancel()
             state.error_message = (
                 f"等待模型首个输出超过 {submission_info.first_chunk_timeout_seconds:g} 秒"
                 f"（模型：{submission_info.effective_model_name}）"
             )
         elif runtime.has_received_chunk and (elapsed_since_chunk >= _STREAM_CHUNK_TIMEOUT_SECONDS):
-            runtime.cancel_event.set()
-            state.done = True
+            runtime.cancellation_token.cancel()
             state.error_message = _STREAM_TIMEOUT_MESSAGE
 
     if state.done and (not runtime.worker.is_alive()):
@@ -518,6 +528,8 @@ def poll_chat_stream_events(*, ticker: str, stream_state_key: str) -> ChatStream
                 state.side_messages.append(trailing_event.chunk)
             elif trailing_event.event_type == "filtered":
                 state.filtered_flags.append(trailing_event.flag)
+            elif trailing_event.event_type == "cancelled":
+                state.error_message = f"{state.error_message}；{trailing_event.chunk}" if state.error_message else trailing_event.chunk
             elif trailing_event.event_type == "error":
                 state.error_message = trailing_event.chunk or "交互式分析执行失败"
     st.session_state[stream_state_key] = state

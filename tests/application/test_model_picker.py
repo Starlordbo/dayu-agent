@@ -9,6 +9,8 @@ from typing import AsyncIterator
 from queue import Queue
 from threading import Event
 
+from dayu.contracts.cancellation import CancellationToken
+
 import pytest
 from streamlit.testing.v1 import AppTest
 
@@ -17,6 +19,7 @@ from dayu.services.chat_stream_config import ChatStreamConfig
 from dayu.contracts.agent_types import AgentMessage, JsonValue
 from dayu.engine.async_openai_runner import AsyncOpenAIRunner
 from dayu.engine.events import EventType, StreamEvent
+from dayu.engine.cancellation import await_or_cancel, create_cancellation_waiter
 from dayu.services.contracts import ChatTurnRequest
 from dayu.execution.options import ExecutionOptions
 from dayu.services.startup_preparation import (
@@ -164,7 +167,18 @@ async def _delayed_runner_call(
     """
     _ = (runner, messages, stream, extra_payloads)
     entered.set()
-    await asyncio.sleep(delay_seconds)
+    token = runner.cancellation_token
+    assert token is not None
+    waiter, unregister = create_cancellation_waiter(token)
+    try:
+        await await_or_cancel(
+            asyncio.sleep(delay_seconds), operation_name="fake first output",
+            cancellation_waiter=waiter, cancellation_token=token,
+            raise_if_cancelled=token.raise_if_cancelled, log_prefix="test",
+        )
+    finally:
+        if unregister is not None:
+            unregister()
     yield StreamEvent(type=EventType.CONTENT_DELTA, data=_SUCCESS_TEXT)
     yield StreamEvent(type=EventType.CONTENT_COMPLETE, data=_SUCCESS_TEXT)
     yield StreamEvent(type=EventType.DONE, data={"finish_reason": "stop"})
@@ -234,14 +248,14 @@ def test_real_chat_first_output_timeout(
                 _FIRST_OUTPUT_TIMEOUT_SECONDS + _TIMEOUT_SCHEDULING_MARGIN_SECONDS
             )
             assert [error.value for error in app.error] == [
-                f"交互式分析执行失败：等待模型首个输出超过 {_FIRST_OUTPUT_TIMEOUT_SECONDS:g} 秒（模型：{_MODEL_NAME}）"
+                f"交互式分析执行失败：等待模型首个输出超过 {_FIRST_OUTPUT_TIMEOUT_SECONDS:g} 秒（模型：{_MODEL_NAME}）；本次运行已取消"
             ]
             assert not any(_SUCCESS_TEXT in item.value for item in app.markdown)
         else:
             assert not app.error
             assert any(_SUCCESS_TEXT in item.value for item in app.markdown)
     finally:
-        # 仅等待假 Runner 自然返回，避免测试线程越过 fixture 生命周期；不扩展生产取消语义。
+        # 等待真实 Host 收尾后的 worker 退出，避免线程越过 fixture 生命周期。
         if runtime is not None:
             runtime.worker.join(timeout=_WORKER_TIMEOUT_SECONDS)
             assert not runtime.worker.is_alive()
@@ -372,7 +386,7 @@ def test_astra_missing_api_key_fails_fast_before_http(
         session_id=build_chat_session_id(_TICKER),
         ticker=_TICKER,
         event_queue=event_queue,
-        cancel_event=Event(),
+        cancellation_token=CancellationToken(),
         trace_id="model-picker-test",
         model_name=_MODEL_NAME,
     )

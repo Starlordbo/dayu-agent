@@ -473,8 +473,16 @@ class DefaultScenePreparer(ScenePreparationProtocol):
         execution_contract: ExecutionContract,
         run_context: HostedRunContext,
     ) -> PreparedAgentExecution:
-        """将 ``ExecutionContract`` 收敛为可执行输入与可恢复快照。"""
+        """将执行契约收敛为输入与快照，准备等待受本次 Host 令牌控制。
 
+        参数:
+            execution_contract: Service 接受的执行契约。
+            run_context: Host 运行身份及取消令牌。
+        返回值: 可执行输入及可选恢复快照。
+        异常: CancelledError 表示运行已取消；配置、存储和准备异常透传。
+        """
+
+        run_context.cancellation_token.raise_if_cancelled()
         user_message = str(execution_contract.message_inputs.user_message or "").strip()
         if not user_message:
             raise ValueError("ExecutionContract.message_inputs.user_message 不能为空")
@@ -507,6 +515,7 @@ class DefaultScenePreparer(ScenePreparationProtocol):
                 transcript=current_archive.runtime_transcript,
                 system_prompt=system_prompt,
                 user_text=user_message,
+                cancellation_token=run_context.cancellation_token,
             )
             if transcript.revision != current_archive.runtime_transcript.revision:
                 # prepare_transcript 内部走 archive_store.save 后，archive 已被推进；

@@ -18,6 +18,8 @@ from dayu.contracts.agent_types import (
     build_user_chat_message,
 )
 from dayu.engine.events import EventType
+from dayu.contracts.cancellation import CancellationToken
+from dayu.engine.cancellation import await_or_cancel, create_cancellation_waiter
 from dayu.log import Log
 from dayu.text import strip_markdown_fence
 from dayu.host._coercion import _coerce_string_tuple
@@ -564,8 +566,20 @@ class ConversationMemoryManagerProtocol(Protocol):
         transcript: ConversationTranscript,
         system_prompt: str,
         user_text: str,
+        cancellation_token: CancellationToken | None = None,
     ) -> ConversationTranscript:
-        """在当前轮开始前补齐必要的同步压缩。"""
+        """在当前轮开始前补齐必要的同步压缩，并等待取消收尾。
+
+        参数:
+            session_id: 会话身份。
+            prepared_scene: 当前场景的记忆配置。
+            transcript: 当前已落盘 transcript。
+            system_prompt: 用于预算估算的系统提示词。
+            user_text: 本轮用户输入。
+            cancellation_token: 可选 Host 取消令牌。
+        返回值: 压缩后的 transcript。
+        异常: CancelledError 表示取消；存储或压缩异常透传。
+        """
         ...
 
     def build_messages(
@@ -1172,6 +1186,7 @@ class DefaultConversationMemoryManager:
         transcript: ConversationTranscript,
         system_prompt: str,
         user_text: str,
+        cancellation_token: CancellationToken | None = None,
     ) -> ConversationTranscript:
         """在当前轮开始前补齐必要的同步压缩。
 
@@ -1181,14 +1196,18 @@ class DefaultConversationMemoryManager:
             transcript: 当前已落盘 transcript。
             system_prompt: 当前轮 system prompt，用于触发公式估算 token。
             user_text: 当前轮用户输入，用于触发公式估算 token。
+            cancellation_token: 本轮 Host 令牌；独立调用未提供时不响应外部取消。
 
         Returns:
             已补齐同步压缩后的 transcript。
 
         Raises:
             RuntimeError: 保存压缩结果时 revision 冲突会继续向上抛出。
+            CancelledError: 本轮取消；压缩子任务结束后才向上抛出。
         """
 
+        token = cancellation_token or CancellationToken()
+        token.raise_if_cancelled()
         self._retrieval_index.index_transcript(transcript)
         current = transcript
         settings = prepared_scene.conversation_memory_settings
@@ -1196,6 +1215,7 @@ class DefaultConversationMemoryManager:
         system_prompt_tokens = _estimate_tokens(str(system_prompt or ""))
         user_text_tokens = _estimate_tokens(str(user_text or ""))
         while True:
+            token.raise_if_cancelled()
             candidate_turns = self._select_compaction_candidate(
                 transcript=current,
                 settings=settings,
@@ -1209,12 +1229,22 @@ class DefaultConversationMemoryManager:
                 f"准备同步压缩 transcript: session_id={session_id}, revision={current.revision}, turns={len(candidate_turns)}",
                 module=MODULE,
             )
-            result = await self._episodic_memory_compressor.compress(
-                session_id=session_id,
-                transcript=current,
-                turns=candidate_turns,
-                settings=settings,
-            )
+            waiter, unregister = create_cancellation_waiter(token)
+            try:
+                result = await await_or_cancel(
+                    self._episodic_memory_compressor.compress(
+                        session_id=session_id, transcript=current,
+                        turns=candidate_turns, settings=settings,
+                    ),
+                    operation_name="prepare transcript compaction",
+                    cancellation_waiter=waiter, cancellation_token=token,
+                    raise_if_cancelled=token.raise_if_cancelled,
+                    log_prefix=f"[{session_id}]", log_module=MODULE,
+                )
+            finally:
+                if unregister is not None:
+                    unregister()
+            token.raise_if_cancelled()
             if result is None:
                 Log.verbose(
                     f"同步压缩返回空结果，保持 transcript 不变: session_id={session_id}, revision={current.revision}",

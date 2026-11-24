@@ -14,6 +14,7 @@ from typing import Any, Dict, Protocol, runtime_checkable
 class AppEventType(Enum):
     """应用层事件类型。"""
 
+    RUN_STARTED = "run_started"
     CONTENT_DELTA = "content_delta"
     REASONING_DELTA = "reasoning_delta"
     FINAL_ANSWER = "final_answer"

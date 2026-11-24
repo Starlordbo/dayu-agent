@@ -3,8 +3,9 @@
 import json
 from pathlib import Path
 from queue import Queue
-from threading import Event
 from typing import Literal
+
+from dayu.contracts.cancellation import CancellationToken
 
 import pytest
 
@@ -90,7 +91,7 @@ def _run_chat_worker(service: ChatService) -> list[StreamQueueItem]:
         session_id=build_chat_session_id("AAPL"),
         ticker="AAPL",
         event_queue=event_queue,
-        cancel_event=Event(),
+        cancellation_token=CancellationToken(),
         trace_id="config-failfast-test",
         model_name=_MODEL_NAME,
     )

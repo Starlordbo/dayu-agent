@@ -51,7 +51,19 @@ class HostExecutorProtocol(Protocol):
         resumed_pending_turn_id: str | None = None,
         resumed_pending_turn_lease_id: str | None = None,
     ) -> AsyncIterator[AppEvent]:
-        """托管一次 Agent 子执行并返回应用层事件流。"""
+        """托管一次 Agent 执行，并在准备前返回本次运行身份。
+
+        参数:
+            execution_contract: Service 接受的执行契约。
+            resumed_pending_turn_id: 可选恢复轮次身份。
+            resumed_pending_turn_lease_id: 与恢复轮次配套的租约。
+        返回值:
+            首项为 RUN_STARTED 的流，payload.run_id 可用于精确取消；通知先于
+            permit 等待及准备。CANCELLED 后必须耗尽流才确认终态及资源收尾。
+        异常:
+            ValueError: 恢复租约参数不完整。
+            Exception: 准备或执行失败在 Host 收尾后透传。
+        """
         ...
 
     def run_prepared_turn_stream(

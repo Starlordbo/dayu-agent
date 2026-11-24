@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from queue import Queue
 from typing import cast
 
+from dayu.contracts.cancellation import CancellationToken
+
 import pytest
 import streamlit.testing.v1.app_test as app_test_module
 from streamlit.runtime.scriptrunner import ScriptRunnerEvent
@@ -148,7 +150,7 @@ class _FragmentScriptRunner(LocalScriptRunner):
             session_id=_SESSION,
             ticker=_TICKER,
             event_queue=plan.event_queue,
-            cancel_event=threading.Event(),
+            cancellation_token=CancellationToken(),
             trace_id=_TRACE_ID,
         )
         self.request_rerun(RerunData(

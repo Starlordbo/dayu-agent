@@ -11,6 +11,7 @@ from enum import Enum
 from typing import AsyncIterator, Optional
 
 from dayu.contracts.events import AppEvent
+from dayu.contracts.cancellation import CancellationToken
 from dayu.contracts.execution_metadata import ExecutionDeliveryContext, empty_execution_delivery_context
 from dayu.contracts.fins import FinsCommand, FinsEvent, FinsResult
 from dayu.contracts.reply_outbox import ReplyOutboxState
@@ -92,6 +93,7 @@ class ChatTurnRequest:
         scene_name: 可选 scene 名称；未传时由 Service 使用默认值。
         session_resolution_policy: 会话解析策略。
         delivery_context: UI 侧交付上下文，用于 pending turn 恢复后重新投递回复。
+        cancellation_token: 本次提交的取消信号；Service 在启动通知后精确转交 Host。
     """
 
     user_text: str
@@ -101,6 +103,7 @@ class ChatTurnRequest:
     scene_name: str | None = None
     session_resolution_policy: SessionResolutionPolicy = SessionResolutionPolicy.AUTO
     delivery_context: ExecutionDeliveryContext | None = None
+    cancellation_token: CancellationToken = field(default_factory=CancellationToken, compare=False)
 
 
 @dataclass(frozen=True)

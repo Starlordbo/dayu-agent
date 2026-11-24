@@ -255,7 +255,14 @@ class SQLiteRunRegistry(RunRegistryProtocol):
         return self._transition(run_id, RunState.RUNNING, started_at=_now_utc())
 
     def complete_run(self, run_id: str, *, error_summary: str | None = None) -> RunRecord:
-        """标记 run 成功完成。"""
+        """在写事务中裁决完成；先到的取消意图优先。
+
+        参数:
+            run_id: 待完成运行。
+            error_summary: 可选完成摘要。
+        返回值: 已落库的 SUCCEEDED 或 CANCELLED 记录及 completed_at。
+        异常: KeyError 表示运行不存在；ValueError 表示非法状态转换。
+        """
 
         return self._transition(
             run_id,
@@ -581,6 +588,15 @@ class SQLiteRunRegistry(RunRegistryProtocol):
                 raise KeyError(f"run 不存在: {run_id}")
 
             current_state = RunState(row["state"])
+            # 与 request_cancel 使用同一写事务裁决：先落库的取消意图不能被
+            # 稍后完成覆盖；成功先落库时 request_cancel 自身会拒绝写入。
+            if (
+                target_state == RunState.SUCCEEDED
+                and current_state == RunState.RUNNING
+                and row["cancel_requested_at"] is not None
+            ):
+                target_state = RunState.CANCELLED
+                cancel_reason = RunCancelReason(row["cancel_requested_reason"])
             is_owner_unsettled_recovery = False
             if not is_valid_transition(current_state, target_state):
                 stored_owner = OwnerIdentity(

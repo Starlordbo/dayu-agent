@@ -48,6 +48,7 @@ from dayu.contracts.execution_metadata import ExecutionDeliveryContext, normaliz
 from dayu.contracts.events import AppEvent, AppEventType, AppResult, PublishedRunEventProtocol
 from dayu.contracts.run import RunCancelReason, RunRecord, RunState
 from dayu.engine.events import EventType
+from dayu.engine.cancellation import await_or_cancel, create_cancellation_waiter
 from dayu.engine.tool_result import project_for_llm
 from dayu.host.conversation_store import ConversationToolUseSummary
 from dayu.log import Log
@@ -515,7 +516,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
         *,
         resumed_pending_turn_id: str | None = None,
         resumed_pending_turn_lease_id: str | None = None,
-    ) -> AsyncIterator[Any]:
+    ) -> AsyncIterator[AppEvent]:
         """托管一次 Agent 子执行并返回应用层事件流。
 
         Args:
@@ -530,7 +531,8 @@ class DefaultHostExecutor(HostExecutorProtocol):
                 非 ``None`` 时本字段必填。
 
         Returns:
-            应用层事件流。
+            应用层事件流；首项 RUN_STARTED 的 payload.run_id 在 permit 等待和准备前
+            可用于 cancel_run。必须耗尽流后才确认终态与资源收尾完成。
 
         Raises:
             RuntimeError: 未配置 scene preparation 时抛出。
@@ -556,7 +558,7 @@ class DefaultHostExecutor(HostExecutorProtocol):
         resumed_pending_turn_id: str | None = None,
         resumed_pending_turn_lease_id: str | None = None,
         replay_capture: _ReplayCapture | None = None,
-    ) -> AsyncIterator[Any]:
+    ) -> AsyncIterator[AppEvent]:
         """``run_agent_stream`` 的内部实现，附带 replay 捕获能力。
 
         Args:
@@ -593,6 +595,9 @@ class DefaultHostExecutor(HostExecutorProtocol):
             metadata=spec.metadata,
         )
         resumable = bool(execution_contract.host_policy.resumable)
+        # 通知先于 permit 获取与 scene preparation；调用方必须继续消费到流结束，
+        # 才能确认终态写入、pending turn 调和和 finally 资源释放均已完成。
+        yield AppEvent(type=AppEventType.RUN_STARTED, payload={"run_id": run.run_id})
         try:
             context, bridge, deadline_watcher, permits = self._start_run(
                 spec=spec, run_id=run.run_id, include_agent_lane=True,
@@ -641,7 +646,20 @@ class DefaultHostExecutor(HostExecutorProtocol):
                     new_source_run_id=run.run_id,
                     lease_id=resumed_pending_turn_lease_id,
                 )
-            prepared_execution = await self.scene_preparation.prepare(execution_contract, context)
+            waiter, unregister = create_cancellation_waiter(context.cancellation_token)
+            try:
+                prepared_execution = await await_or_cancel(
+                    self.scene_preparation.prepare(execution_contract, context),
+                    operation_name="scene preparation",
+                    cancellation_waiter=waiter,
+                    cancellation_token=context.cancellation_token,
+                    raise_if_cancelled=context.cancellation_token.raise_if_cancelled,
+                    log_prefix=f"[{run.run_id}]",
+                    log_module=MODULE,
+                )
+            finally:
+                if unregister is not None:
+                    unregister()
             if resumable and prepared_execution.resume_snapshot is None:
                 raise RuntimeError("resumable scene preparation 缺少 prepared snapshot")
             if prepared_execution.resume_snapshot is not None and resumed_pending_turn_id is None:

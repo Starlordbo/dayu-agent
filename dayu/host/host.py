@@ -625,7 +625,8 @@ class Host:
                 双条件 CAS 失配会被识别为"已被接管"。非 resume 路径保持 ``None``。
 
         Yields:
-            应用层事件。
+            应用层事件；首项 RUN_STARTED 在 permit 等待及准备前提供 payload.run_id。
+            取消后应继续耗尽流，确认终态写入和资源释放完成。
 
         Raises:
             无。

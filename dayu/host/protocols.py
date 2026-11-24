@@ -1517,6 +1517,24 @@ class ChatServiceHostProtocol(
     ``HostAdminOperationsProtocol`` 的历史读取与会话清空能力。
     """
 
+    def cancel_run(self, run_id: str) -> RunRecord:
+        """登记单次聊天运行的取消意图。
+
+        参数: run_id 为启动通知中的精确运行身份。
+        返回值: 当前运行记录；此返回值不代表执行已收尾。
+        异常: KeyError 表示运行不存在。
+        """
+        ...
+
+    def get_run(self, run_id: str) -> RunRecord | None:
+        """读取运行以校验本次提交归属。
+
+        参数: run_id 为运行身份。
+        返回值: 当前记录，不存在时为 None。
+        异常: 仓储读取异常透传。
+        """
+        ...
+
 
 __all__ = [
     "ConversationSessionDigest",

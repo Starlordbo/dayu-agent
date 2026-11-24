@@ -790,8 +790,6 @@ def test_run_agent_stream_keeps_prepared_pending_turn_when_timeout_occurs_before
 
     class _StubScenePreparation:
         async def prepare(self, execution_contract: ExecutionContract, run_context: HostedRunContext) -> PreparedAgentExecution:
-            run_registry.request_cancel(run_context.run_id, cancel_reason=RunCancelReason.TIMEOUT)
-            run_context.cancellation_token.cancel()
             return _build_prepared_execution(execution_contract=execution_contract)
 
         async def restore_prepared_execution(
@@ -805,6 +803,7 @@ def test_run_agent_stream_keeps_prepared_pending_turn_when_timeout_occurs_before
     class _FakeAgent:
         async def run_messages(self, messages, *, session_id, run_id, stream):
             del messages, session_id, stream
+            run_registry.request_cancel(run_id, cancel_reason=RunCancelReason.TIMEOUT)
             raise CancelledError(f"cancelled before first event: {run_id}")
             yield  # pragma: no cover
 
@@ -868,8 +867,6 @@ def test_run_agent_stream_keeps_prepared_pending_turn_when_timeout_occurs_after_
 
     class _StubScenePreparation:
         async def prepare(self, execution_contract: ExecutionContract, run_context: HostedRunContext) -> PreparedAgentExecution:
-            run_registry.request_cancel(run_context.run_id, cancel_reason=RunCancelReason.TIMEOUT)
-            run_context.cancellation_token.cancel()
             return _build_prepared_execution(execution_contract=execution_contract)
 
         async def restore_prepared_execution(
@@ -884,6 +881,7 @@ def test_run_agent_stream_keeps_prepared_pending_turn_when_timeout_occurs_after_
         async def run_messages(self, messages, *, session_id, run_id, stream):
             del messages, session_id, stream
             yield StreamEvent(EventType.FINAL_ANSWER, {"content": "done", "degraded": False}, {})
+            run_registry.request_cancel(run_id, cancel_reason=RunCancelReason.TIMEOUT)
             raise CancelledError(f"cancelled: {run_id}")
 
     run_registry = StubRunRegistry()
@@ -1586,7 +1584,7 @@ def test_run_agent_stream_keeps_success_when_sent_to_llm_update_fails(monkeypatc
     assert run.state.value == "succeeded"
     assert session_state.persist_calls == 1
     assert pending_turn_store.list_pending_turns(session_id="s1", scene_name="interactive") == []
-    assert [event.type for event in events] == [AppEventType.FINAL_ANSWER]
+    assert [event.type for event in events] == [AppEventType.RUN_STARTED, AppEventType.FINAL_ANSWER]
 
 
 @pytest.mark.unit

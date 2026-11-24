@@ -136,8 +136,8 @@ pip install -r requirements.txt
 - `test_web_routes.py` 还要守住 `/api/write` 的未支持语义：当 Web 当前不支持在线写作时，route 必须显式返回 `501`，不能再用 `202` / `accepted=true` 伪装成已受理。
 - `test_streamlit_watchlist.py` 负责守住 Streamlit 自选股组件的本地持久化与表格合并边界：`workspace/.dayu/streamlit/watchlist.json` 读写、删除/编辑/新增合并、必填校验与 ticker 去重语义不能漂移。
 - `test_streamlit_chat_utils.py` 负责守住 `chat/utils.py` 的 session/trace 标识生成、流式文本提取与 Markdown 归一，以及事件折叠保留副作用消息等纯函数语义。
-- `test_streamlit_chat_stream_runtime.py` 负责守住 `chat/stream_runtime.py` 的首 chunk 超时、chunk 间超时、消费线程停止信号、worker 退出后 trailing event 消费与 error 事件收口语义；线程信号不等于 Host run 已取消。
-- `test_chat_stream_config.py` 覆盖首输出阈值默认 90 秒、runner 覆盖和非法配置；`test_model_picker.py` 验证 Service 提交返回实际模型与阈值、省略模型选择时恢复会话绑定，以及真实 AppTest 页面经 Service / Host / Agent 到延迟假 Runner 的超时文案、阈值附近耗时、快路径和放宽阈值后的完成行为。延迟测试只等待假 Runner 自然返回，不据此断言 Host 取消或孤儿 run 已修复。
+- `test_streamlit_chat_stream_runtime.py` 负责守住 `chat/stream_runtime.py` 的首 chunk 超时、chunk 间超时、本次提交取消信号、worker 退出后 trailing event 消费与 error 事件收口语义；超时不得立即标记完成，取消文案必须等待 Host 流收尾。
+- `test_chat_stream_config.py` 覆盖首输出阈值默认 90 秒、runner 覆盖和非法配置；`test_model_picker.py` 验证 Service 提交返回实际模型与阈值、省略模型选择时恢复会话绑定，以及真实 AppTest 页面经 Service / Host / Agent 到延迟假 Runner 的超时文案、阈值附近耗时、快路径和放宽阈值后的完成行为。延迟假 Runner 接收真实 Host 令牌，保留原超时耗时边界，并验证取消确认文案。
 - `test_streamlit_chat_tab.py` 负责守住 `chat_tab.py` 中 `ChatMessage` 稳定语义、`load_history_for_ticker` 的历史轮次映射与 fail-soft（空结果/异常）语义，以及 `perform_clear_session_history` 对 `KeyError / Rejected / Stale(含静默重试) / PartiallyApplied / 重试失败` 的 UI 分支语义。
 - `tests/engine/test_config_loader_failfast.py` 负责守住单模型加载拒绝缺失、空白及残留占位符，目录枚举保留未使用模型模板，诊断不回显变量值；`tests/application/test_llm_config_failfast.py` 通过真实 UI worker 和 Service 验证失败时零 HTTP、错误终态投递，以及修复变量后经 Host/Agent/Runner 重试成功。纯路由和 CLI 配置测试也必须为实际加载的模型提供有效的独立测试变量，不依赖开发机凭据。
 - `tests/application/test_model_picker.py` 使用内置配置与真实 AppTest 下拉选择，经 UI worker、Service、Host、Agent、Runner 的假 HTTP 验证 `gpt-6-astra` 固定请求模型；同时验证不依赖 `OPENAI_RESPONSES_MODEL`、缺少 `OPENAI_API_KEY` 时明确报错且零 HTTP。
@@ -170,6 +170,7 @@ pip install -r requirements.txt
 - 直接构造 `ResolvedExecutionOptions`、`AcceptedToolConfigSpec` 或 `PreparedAgentTurnSnapshot` 的测试，工具配置应通过 `toolset_configs` 进入契约；不要再把 `doc_tool_limits` / `fins_tool_limits` / `web_tools_config` 当成跨层字段夹带到 Host 或 contract snapshot。
 - `test_scene_execution.py` 还要守住内部 `RunnerType` / `FallbackMode` 可提升为枚举承接，但配置快照和 JSON 边界仍保持原字符串值，不要把外部输入边界改造成枚举字面量协议。
 - execution 运行配置的测试真源现在拆成三层：`dayu.contracts.runtime_config_snapshot` 负责跨层快照 TypedDict（`RunnerRunningConfigSnapshot` / `AgentRunningConfigSnapshot`）；`dayu.execution.options` 负责合并规则；`dayu.execution.runtime_config` 负责纯运行配置模型与快照转换函数。凡是直接构造 `ResolvedExecutionOptions` 的测试，应优先使用 `AgentRuntimeConfig`、`OpenAIRunnerRuntimeConfig`、`CliRunnerRuntimeConfig` 这组 execution 侧纯模型，不要再把 engine 实现类直接塞回 execution 层对象。
+- `test_host_cancel_contract.py` 使用真实 SQLite Host、ChatService、AsyncAgent 与假 Runner，覆盖准备阶段无事件、启动通知处取消、会话锁和并发许可等待、首输出超时、同 session 隔离及取消/自然完成事务竞态；必须断言 `completed_at`、唯一终态、资源释放、worker 退出及工具调用计数停止。`test_conversation_memory.py` 还验证准备压缩取消后子任务结束、archive 不变。
 - `test_host_executor.py`、`test_run_registry.py`、`test_host_admin_service.py` 与 `test_web_routes.py` 需要共同守住 Host timeout 取消链路。`request_cancel()` 只记录 `cancel_requested_at` / `cancel_requested_reason`，终态 `cancel_reason` 必须等 Host 在 run 生命周期边界统一收敛后才写入；管理视图与 API 需要同时透出这两层信息。
 - `test_host_executor.py` 与 `test_run_registry.py` 还要继续守住 orphan run 修复语义：startup cleanup 只能清理超过 grace period 的 dead-pid 活跃 run，不能误伤刚启动或仍在收尾的前台 direct operation；若同一 owner 的 run 被外部误判成 `orphan: owner process terminated`，后续成功收口必须允许修复回 `SUCCEEDED`，而异常路径也不能再被重复 `fail_run()` 掩盖成状态机错误。
 - `test_host_executor.py` 还要守住 transcript 落库闸门：即使 Agent 本轮已经产出 `final_answer`，只要 run 在 transcript 持久化前被取消，`persist_turn()` 也必须跳过，不能把“已取消”run 的回答写进会话真源。

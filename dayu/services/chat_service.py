@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import weakref
 from dataclasses import dataclass, field, replace
+from functools import partial
 from typing import AsyncIterator, Callable
 
 from dayu.contracts.agent_execution import ExecutionContract
-from dayu.contracts.events import AppEvent
+from dayu.contracts.events import AppEvent, AppEventType
+from dayu.contracts.cancellation import CancelledError
 from dayu.contracts.model_config import normalize_runner_type
 from dayu.contracts.session import SessionSource
 from dayu.host.protocols import (
@@ -36,6 +38,16 @@ from dayu.services.prompt_contributions import (
 )
 from dayu.services.protocols import ChatServiceProtocol
 from dayu.services.scene_execution_acceptance import AcceptedSceneExecution, SceneExecutionAcceptancePreparer
+
+
+def _cancel_session_lock_wait(loop: asyncio.AbstractEventLoop, task: asyncio.Task[bool]) -> None:
+    """把跨线程提交取消投递到尚未创建 run 的锁等待任务。
+
+    参数: loop 为任务所属事件循环，task 为本次提交的锁获取任务。
+    返回值: 无。
+    异常: RuntimeError 表示事件循环已关闭。
+    """
+    loop.call_soon_threadsafe(task.cancel)
 
 
 @dataclass(frozen=True)
@@ -321,16 +333,56 @@ class ChatService(ChatServiceProtocol):
             无：异常会沿事件流向上抛出，``finally`` 仍会释放锁。
         """
 
-        await session_lock.acquire()
+        token = request.cancellation_token
+        acquire_task = asyncio.create_task(session_lock.acquire())
+        unregister_waiter = token.on_cancel(partial(
+            _cancel_session_lock_wait, asyncio.get_running_loop(), acquire_task,
+        ))
+        unregister_run: Callable[[], None] | None = None
         try:
+            try:
+                await acquire_task
+            except asyncio.CancelledError:
+                if not token.is_cancelled():
+                    raise
+                raise CancelledError("本次提交在等待会话锁时被取消") from None
+            unregister_waiter()
+            token.raise_if_cancelled()
             async for event in self._stream_turn_in_session(
                 request=request,
                 session_id=session_id,
                 prepared_context=prepared_context,
             ):
+                if event.type == AppEventType.RUN_STARTED:
+                    run_id = str(event.payload["run_id"])
+                    unregister_run = token.on_cancel(partial(
+                        self._cancel_submitted_run, session_id=session_id, run_id=run_id,
+                    ))
                 yield event
+        except CancelledError:
+            # 只有未进入 Host 的锁等待取消走这里；已启动运行由 Host 收敛。
+            yield AppEvent(type=AppEventType.CANCELLED, payload={"before_run": True})
         finally:
-            session_lock.release()
+            if unregister_run is not None:
+                unregister_run()
+            unregister_waiter()
+            # 获取锁与取消可在同一轮唤醒；只释放本任务实际拿到的锁。
+            if not acquire_task.cancelled() and acquire_task.result():
+                session_lock.release()
+
+    def _cancel_submitted_run(self, *, session_id: str, run_id: str) -> None:
+        """校验归属后把提交取消精确转成 Host 取消意图。
+
+        参数:
+            session_id: 本次提交解析得到的会话。
+            run_id: Host 启动通知中的运行身份。
+        返回值: 无；确认以事件流耗尽为准。
+        异常: ValueError 表示启动通知归属不符；Host 仓储异常透传。
+        """
+        run = self.host.get_run(run_id)
+        if run is None or run.session_id != session_id:
+            raise ValueError("启动通知的运行不属于本次会话")
+        self.host.cancel_run(run_id)
 
     async def _stream_turn_in_session(
         self,

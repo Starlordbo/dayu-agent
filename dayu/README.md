@@ -491,9 +491,11 @@ class ExecutionOptions:
 
 ```python
 class AppEventType(Enum):
+    RUN_STARTED = "run_started"  # Host 在准备前颁发本次 run_id
     CONTENT_DELTA = "content_delta"
     REASONING_DELTA = "reasoning_delta"  # 推理/思维链增量，用于将模型的思考过程与最终回答分离
     FINAL_ANSWER = "final_answer"
+    CANCELLED = "cancelled"
     TOOL_EVENT = "tool_event"
     WARNING = "warning"
     ERROR = "error"
@@ -533,7 +535,10 @@ class PromptSubmission:
 
 聊天 Service 从实际接受的模型及启动期注入的聊天等待配置解析提交阈值，UI 只消费
 `effective_model_name` 和 `first_chunk_timeout_seconds`，不自行推断模型或读取配置。
-这两个字段描述展示等待策略，不改变 Host 的运行生命周期与取消契约。
+这两个字段描述展示等待策略。聊天 UI 超时后通过 `ChatTurnRequest.cancellation_token`
+发出本次提交的取消信号；Service 在 Host 的 `RUN_STARTED` 通知中取得精确 `run_id`
+并请求 Host 取消，继续消费至流耗尽后才向 UI 确认。锁等待期尚无 run 时，由 Service
+撤回本次等待。终态与资源收尾仍由 Host 负责，详见 [Host 取消契约](host/README.md#5-run-状态机)。
 
 #### 4.1.3 `AppResult`
 

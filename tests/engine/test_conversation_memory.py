@@ -11,6 +11,7 @@ from typing import cast
 
 import pytest
 
+from dayu.contracts.cancellation import CancelledError, CancellationToken
 from dayu.contracts.agent_execution import AgentCreateArgs
 from dayu.contracts.agent_types import AgentMessage
 from dayu.contracts.infrastructure import PromptAssetStoreProtocol
@@ -1420,3 +1421,45 @@ def _dc_replace_archive_history(
         runtime_transcript=runtime,
         history_archive=new_history,
     )
+
+
+@pytest.mark.asyncio
+async def test_prepare_transcript_cancellation_does_not_write_archive(tmp_path: Path) -> None:
+    """同步压缩阻塞时取消必须等待子任务结束，并保持 archive 不变。
+
+    参数: tmp_path 为隔离目录。
+    返回值: 无。
+    异常: 断言失败。
+    """
+    settings = ConversationMemorySettings()
+    store = FileConversationSessionArchiveStore(tmp_path / "cancel-conversations")
+    compressor = _FakeCompressor(delay=60.0)
+    manager = DefaultConversationMemoryManager(
+        _FakeRuntime(resolved_options=_build_resolved_options(settings)),
+        archive_store=store,
+        episodic_memory_compressor=compressor,
+    )
+    transcript = ConversationTranscript.create_empty("cancel-session")
+    for index in range(6):
+        transcript = transcript.append_turn(ConversationTurnRecord(
+            turn_id=f"turn-{index}", scene_name="interactive", user_text="x" * 800, assistant_final="",
+        ))
+    archive = store.save(_archive_from_transcript(transcript), expected_revision=None)
+    token = CancellationToken()
+    before_tasks = asyncio.all_tasks()
+    pending = asyncio.create_task(manager.prepare_transcript(
+        session_id=transcript.session_id,
+        prepared_scene=_build_prepared_scene(settings=settings, max_context_tokens=2048),
+        transcript=archive.runtime_transcript, system_prompt="sys", user_text="test",
+        cancellation_token=token,
+    ))
+    for _ in range(100):
+        if compressor.calls:
+            break
+        await asyncio.sleep(0.01)
+    assert compressor.calls
+    token.cancel()
+    with pytest.raises(CancelledError):
+        await asyncio.wait_for(pending, timeout=2.0)
+    assert asyncio.all_tasks() == before_tasks
+    assert store.load(transcript.session_id) == archive

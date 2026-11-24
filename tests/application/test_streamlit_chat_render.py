@@ -12,6 +12,8 @@ from pathlib import Path
 from queue import Queue
 from urllib.parse import parse_qs, urlsplit
 
+from dayu.contracts.cancellation import CancellationToken
+
 import pytest
 from streamlit.testing.v1 import AppTest
 from streamlit.testing.v1.element_tree import Block
@@ -293,7 +295,7 @@ def _install_queue(app: AppTest, monkeypatch: pytest.MonkeyPatch) -> Queue[ChatS
     queue: Queue[ChatStreamEvent] = Queue()
     now = time.perf_counter()
     monkeypatch.setitem(CHAT_STREAM_RUNTIME_HANDLES, _TICKER, ChatStreamRuntimeHandle(
-        worker=worker, event_queue=queue, cancel_event=threading.Event(), started_at=now,
+        worker=worker, event_queue=queue, cancellation_token=CancellationToken(), started_at=now,
         last_chunk_at=now, has_received_chunk=False,
     ))
     app.session_state[_STATE] = new_stream_frame_state(trace_id="render-test", session_id=_SESSION)
