@@ -717,6 +717,7 @@ def test_load_scene_manifest_reads_interactive_manifest() -> None:
     assert manifest["model"]["default_name"] == "deepseek-v4-flash-thinking"
     assert manifest["model"]["allowed_names"] == _EXPECTED_INTERACTIVE_ALLOWED_NAMES
     assert manifest["model"]["temperature_profile"] == "interactive"
+    assert _require_runtime_agent_max_iterations(manifest) == 30
     assert _require_conversation(manifest)["enabled"] is True
     assert _require_tool_selection(manifest)["mode"] == "select"
     assert set(_require_tool_tags_any(manifest)) == {"fins", "web", "ingestion"}
