@@ -61,6 +61,7 @@ from .protocols import AsyncRunner, ToolExecutor
 from dayu.log import Log
 from .tool_contracts import DupCallSpec
 from .tool_result import (
+    get_user_notice,
     is_tool_success,
     project_for_llm,
 )
@@ -682,6 +683,7 @@ class AsyncAgent:
         duplicate_call_guard = DuplicateCallGuard(
             max_duplicate_tool_calls=self.max_duplicate_tool_calls,
         )
+        tool_notices: set[str] = set()
 
         # 上下文预算状态（max_context_tokens=0 时不生效）
         budget_state = ContextBudgetState(
@@ -819,6 +821,10 @@ class AsyncAgent:
                     tool_name = tool_calls_data[tool_call_id]["name"]
                     tool_args = tool_calls_data[tool_call_id]["arguments"]
                     result = tool_calls_data[tool_call_id].get("result", {})
+                    notice = get_user_notice(result) if isinstance(result, dict) else None
+                    if notice is not None and notice not in tool_notices:
+                        tool_notices.add(notice)
+                        yield self._annotate_event(warning_event(notice), run_id=run_id, iteration_id=iteration_id)
                     dup_call_spec: DupCallSpec | None = (
                         cast(DupCallSpec | None, self.tool_executor.get_dup_call_spec(tool_name))
                         if self.tool_executor is not None

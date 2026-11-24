@@ -12,9 +12,28 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Generic, Optional, TypeVar
 
 from .exceptions import ConfigError
+
+_TerminalValue = TypeVar("_TerminalValue")
+
+
+@dataclass(frozen=True)
+class TerminalToolResult(Generic[_TerminalValue]):
+    """工具治理终态：保留完整业务载荷，跳过正文截断并提示用户。
+
+    参数:
+        value: 可序列化的业务终态载荷，仍按成功信封交给模型。
+        user_notice: 经 Agent WARNING 进入终态反馈的提示。
+    返回值:
+        治理终态声明；不会终止 Agent 运行。
+    异常:
+        无。
+    """
+
+    value: _TerminalValue
+    user_notice: str
 
 # Strategy -> required limit key, truncation unit, and reason label.
 TRUNCATION_STRATEGIES: Dict[str, Dict[str, str]] = {

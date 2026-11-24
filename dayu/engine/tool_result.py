@@ -27,7 +27,10 @@ from __future__ import annotations
 
 import base64
 import json
+from collections.abc import Mapping
 from typing import Any, Optional, TypeAlias
+
+from dayu.contracts.agent_types import JsonValue
 
 
 JsonSafeScalar: TypeAlias = str | int | float | bool | None
@@ -106,6 +109,25 @@ def build_error(
 # ---------------------------------------------------------------------------
 # 拆信封
 # ---------------------------------------------------------------------------
+
+def get_user_notice(result: Mapping[str, JsonValue]) -> str | None:
+    """读取工具成功信封中由工具治理机制产生的用户提示。
+
+    参数:
+        result: 工具结果信封。
+    返回值:
+        非空提示文本；没有合法提示则返回 None。
+    异常:
+        无。
+    """
+    if result.get("ok") is not True:
+        return None
+    meta = result.get("meta")
+    if not isinstance(meta, dict):
+        return None
+    notice = meta.get("user_notice")
+    return notice.strip() if isinstance(notice, str) and notice.strip() else None
+
 
 def is_tool_success(result: Any) -> bool:
     """按统一口径判断工具结果是否真正成功。

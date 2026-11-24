@@ -373,6 +373,8 @@ pip install -r requirements.txt
 
 ### 3.5 Fins 相关变更
 
+检索预算测试分别守住配置、工具准入和 Agent 可见性：`tests/application/test_retrieval_budget_config.py` 验证默认值、非法值、稀疏覆盖和 Host 请求快照往返；`tests/fins/test_retrieval_budget.py` 验证七种非结构化工具共享额度、别名同源、跨公司/跨 run 隔离、并发原子性、失败计数和结构化取数豁免；`tests/application/test_retrieval_budget_agent.py` 用真实 Agent 与离线 Runner 验证耗尽结果回填、正常最终答案及终态 side message。极小输出上限也不得截断耗尽建议或已尝试范围。`tests/engine/test_tool_notices.py` 守住通用治理提示信封，`test_streamlit_chat_render.py` 还必须逐公司核验读取上限，并在终态重绘后完整保留两家公司的耗尽提示及原有轮次上限告警。
+
 Fins 相关改动时，至少同步更新：
 - `tests/fins/test_fins_tools_service.py`
 - `tests/fins/test_fins_tools_registry.py`

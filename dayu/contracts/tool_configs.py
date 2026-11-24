@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from dayu.contracts.toolset_config import (
+    ToolsetConfigValue,
     ToolsetConfigSnapshot,
     coerce_toolset_config_float,
     coerce_toolset_config_int,
@@ -16,6 +17,21 @@ from dayu.contracts.toolset_config import (
     replace_toolset_config,
     build_toolset_config_snapshot,
 )
+
+
+def validate_retrieval_budget(value: ToolsetConfigValue) -> int:
+    """严格验证每公司检索调用预算。
+
+    参数:
+        value: 配置原始值；不接受布尔、字符串、浮点数或空值。
+    返回值:
+        正整数预算。
+    异常:
+        ValueError: 预算不是正整数。
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError("fins_tool_limits.retrieval_budget_per_ticker 必须是正整数")
+    return value
 
 
 @dataclass(frozen=True)
@@ -48,6 +64,7 @@ class FinsToolLimits:
     """财报工具限制配置。
 
     Args:
+        retrieval_budget_per_ticker: 单次运行中每公司非结构化检索调用预算。
         processor_cache_max_entries: Processor 缓存最大条目数。
         list_documents_max_items: ``list_documents`` 返回最大文档条目数。
         get_document_sections_max_items: ``get_document_sections`` 返回最大章节条目数。
@@ -63,9 +80,10 @@ class FinsToolLimits:
         无。
 
     Raises:
-        无。
+        ValueError: 检索预算不是正整数。
     """
 
+    retrieval_budget_per_ticker: int = 16
     processor_cache_max_entries: int = 128
     list_documents_max_items: int = 300
     get_document_sections_max_items: int = 1200
@@ -76,6 +94,18 @@ class FinsToolLimits:
     get_table_max_items: int = 800
     get_financial_statement_max_items: int = 1200
     query_xbrl_facts_max_items: int = 1200
+
+    def __post_init__(self) -> None:
+        """验证累计检索预算，不改变既有单次输出上限语义。
+
+        参数:
+            无。
+        返回值:
+            无。
+        异常:
+            ValueError: 检索预算不是正整数。
+        """
+        validate_retrieval_budget(self.retrieval_budget_per_ticker)
 
 
 @dataclass(frozen=True)
@@ -162,11 +192,15 @@ def build_fins_tool_limits(snapshot: ToolsetConfigSnapshot | None) -> FinsToolLi
 
     Raises:
         TypeError: 当快照字段类型非法时抛出。
+        ValueError: 检索预算不是正整数。
     """
 
     payload = snapshot.payload if snapshot is not None else {}
     defaults = FinsToolLimits()
     return FinsToolLimits(
+        retrieval_budget_per_ticker=validate_retrieval_budget(
+            payload.get("retrieval_budget_per_ticker", defaults.retrieval_budget_per_ticker),
+        ),
         processor_cache_max_entries=coerce_toolset_config_int(
             payload.get("processor_cache_max_entries"),
             field_name="fins.processor_cache_max_entries",

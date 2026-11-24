@@ -487,7 +487,23 @@ Agent 行为控制：
 
 ### 5.4 `fins_tool_limits`
 
-财报工具参数上限：
+财报工具限制分为累计调用预算与单次返回量上限。`retrieval_budget_per_ticker` 默认 `16`，表示一次 Host run 中每个规范 ticker 的非结构化读取调用总额；必须是正整数，`0`、负数、布尔、字符串、浮点数和 `null` 都报错。工作区可覆盖：
+
+```json
+{
+  "fins_tool_limits": {
+    "retrieval_budget_per_ticker": 16
+  }
+}
+```
+
+计入预算的是 `list_documents`、`get_document_sections`、`search_document`、`read_section`、`list_tables`、`get_table`、`get_page_content`，每次调用计一次（批量查询也计一次）。`read_section` 计入是为了防止逐章遍历绕过检索上限。默认 16 次为目录定位、搜索和精读留出空间；提示词里的约 8 次自由检索建议保持原值。
+
+`get_financial_statement` 和 `query_xbrl_facts` 不计入，预算耗尽后仍可用于明确的财务数值取数；它们继续受单次输出上限和 Agent 轮次限制约束。`fetch_more` 只续读已生成的缓存结果，不消耗新的检索额度。
+
+计数在调用进入读取操作前原子预留，已准入的失败尝试也消耗额度；参数 schema 不通过或公司无法解析时不计入。规范 ticker 与公司别名共用额度，不同公司、不同 run 相互独立。第 16 次允许执行，第 17 次起返回完整的 `budget_exhausted` 结果，包含已尝试范围、执行状态及作答建议；告警经现有 side message 路径留在终态反馈中。运行恢复重新装配工具集时额度重新开始，不跨进程持久化。
+
+以下字段继续保持原有缓存容量和单次返回量语义：
 
 - `processor_cache_max_entries`
 - `list_documents_max_items`

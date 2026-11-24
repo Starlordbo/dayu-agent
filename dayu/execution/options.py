@@ -22,6 +22,7 @@ from dayu.contracts.tool_configs import (
     build_fins_tool_limits,
     build_legacy_toolset_configs,
     build_web_tools_config,
+    validate_retrieval_budget,
 )
 from dayu.contracts.toolset_config import (
     ToolsetConfigSnapshot,
@@ -401,6 +402,7 @@ def _build_fins_tool_limits_from_override(
         allowed_keys=frozenset(
             {
                 "processor_cache_max_entries",
+                "retrieval_budget_per_ticker",
                 "list_documents_max_items",
                 "get_document_sections_max_items",
                 "search_document_max_items",
@@ -418,6 +420,9 @@ def _build_fins_tool_limits_from_override(
     # 仅收集请求中显式指定的字段，未指定的保留 base 值
     overrides: dict[str, int] = {}
     for key in payload:
+        if key == "retrieval_budget_per_ticker":
+            overrides[key] = validate_retrieval_budget(payload[key])
+            continue
         parsed = _parse_override_int(
             payload[key],
             field_name=f"execution_options.fins_tool_limits_override.{key}",

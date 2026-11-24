@@ -14,7 +14,7 @@ from dayu.contracts.protocols import ToolExecutionContext
 from .argument_validator import ArgumentValidator
 from .exceptions import ConfigError, FileAccessError
 from dayu.log import Log
-from .tool_contracts import DupCallSpec, ToolFunctionSchema, ToolSchema, ToolTruncateSpec
+from .tool_contracts import DupCallSpec, TerminalToolResult, ToolFunctionSchema, ToolSchema, ToolTruncateSpec
 from .tool_errors import ToolBusinessError
 from .tool_result import build_error, build_success, is_tool_success
 from .truncation_manager import TruncationManager
@@ -552,16 +552,19 @@ class ToolRegistry:
                 call_arguments[execution_context_param_name] = context
                 result = func(**call_arguments)
 
-            # 截断处理
-            truncate_spec = getattr(tool_extra, "__truncate__", None)
-            value, truncation = self._truncation_manager.apply_truncation(
-                name=name,
-                arguments=arguments,
-                value=result,
-                context=context,
-                truncate_spec=truncate_spec,
-            )
-            result = build_success(value=value, truncation=truncation)
+            if isinstance(result, TerminalToolResult):
+                # 治理终态没有正文分页，完整保留范围和建议供模型与用户消费。
+                result = build_success(value=result.value, meta={"user_notice": result.user_notice})
+            else:
+                truncate_spec = getattr(tool_extra, "__truncate__", None)
+                value, truncation = self._truncation_manager.apply_truncation(
+                    name=name,
+                    arguments=arguments,
+                    value=result,
+                    context=context,
+                    truncate_spec=truncate_spec,
+                )
+                result = build_success(value=value, truncation=truncation)
             # 链式执行 response middleware；透传 context 以支持按轮次感知（index_in_iteration）
             for middleware in self._response_middlewares:
                 result = middleware(name, result, context)

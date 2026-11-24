@@ -233,7 +233,7 @@ class FinsToolService:
             RuntimeError: 仓储读取失败时抛出。
         """
 
-        normalized_ticker = self._resolve_canonical_ticker(
+        normalized_ticker = self.resolve_ticker(
             ticker=ticker,
             tool_name="list_documents",
         )
@@ -1301,7 +1301,7 @@ class FinsToolService:
             ToolBusinessError: ticker 未收录于当前工作区时抛出。
         """
 
-        normalized_ticker = self._resolve_canonical_ticker(ticker=ticker, tool_name=tool_name)
+        normalized_ticker = self.resolve_ticker(ticker=ticker, tool_name=tool_name)
         normalized_document_id = require_non_empty_text(
             document_id,
             empty_error=ToolArgumentError(
@@ -1318,7 +1318,7 @@ class FinsToolService:
         )
         return normalized_ticker, resolved_document_id
 
-    def _resolve_canonical_ticker(self, *, ticker: str, tool_name: str) -> str:
+    def resolve_ticker(self, *, ticker: str, tool_name: str) -> str:
         """将外部 ticker 归一化为可用 ticker。
 
         解析顺序：

@@ -1163,6 +1163,7 @@ dayu-render workspace/draft/AAPL/AAPL_qual_report.md report.html
 - 想换模型：改 `llm_models.json`
 - 想新增自定义模型：先在 `workspace/config/llm_models.json` 里添加模型配置；再把该模型加入对应 scene manifest 的 `workspace/config/prompts/manifests/*.json -> model.allowed_names`，必要时改 `model.default_name`；如果该模型要长期参与 `interactive` 多轮会话，建议同时给该模型补 `runtime_hints.conversation_memory`
 - 想调 Agent 行为：改 `run.json`；其中 `conversation_memory` 控制 `interactive` 多轮会话的历史预算与压缩策略
+- 想调每家公司检索次数：改 `workspace/config/run.json` 的 `fins_tool_limits.retrieval_budget_per_ticker`（默认 16）。同一次运行内按公司分别计数，耗尽后显示提示并引导基于现有证据回答；结构化财务取数仍可用。计数范围与配置示例见[配置手册](dayu/config/README.md#54-fins_tool_limits)。
 - 想延长网页聊天的首输出等待：改 `run.json.chat_stream_config`；默认 90 秒，可按 runner 配置，例如为 `openai_responses` 设置 300 秒，详见[配置示例](dayu/config/README.md#聊天首输出等待chat_stream_config)。UI 超时不代表 Host run 已取消。
 - 想改系统提示词和任务提示词：改 `prompts/`
 

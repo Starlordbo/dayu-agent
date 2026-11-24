@@ -158,11 +158,24 @@ Fins 当前通过两个 toolset registrar 向 Agent 路径注入工具：
 其中：
 - registrar 内部自行准备 `FinsRuntime` / `FinsToolService` / `service_factory + manager_key`
 - 财报读取 toolset 的限制配置由 registrar 自己从 `context.toolset_config.payload` 反解，不再由 Host 传专用 `fins_tool_limits`
-- registrar 反解 `context.toolset_config.payload` 中的数值限制时，必须走 `dayu.contracts.toolset_config` 的统一 coercion helper，不能直接对 `ToolsetConfigValue` 做裸 `int()`
+- registrar 通过 `dayu.contracts.tool_configs.build_fins_tool_limits` 反解配置：既有输出限制使用统一 coercion helper；`retrieval_budget_per_ticker` 使用正整数严格校验，不接受隐式转换
 - 财报读取工具只接受预构建 `FinsToolService`
 - 所有带 `document_id` 的读取工具共用源文档归属校验。当前公司找不到该 ID 时，服务通过公司盘点仓储与源文档句柄核实其他公司的归属；确有其他归属则返回 `invalid_argument`，列出公司及当前 ticker，并提示重新 `list_documents`。真正缺失仍保留 `FileNotFoundError` / 工具层 `file_not_found`，不自动切换公司。ID 不要求全局唯一，当前公司也存在同名 ID 时仍正常读取；跨公司盘点只发生在当前公司缺失路径，不创建其他公司的处理器。
 - ingestion 工具只接受 `service_factory + manager_key`；下载 job 工具按 ticker 归一化后的市场路由到同一 ingestion service factory，当前支持美股、A 股、港股，A 股/港股表单过滤使用 `FY/H1/Q1/Q2/Q3/Q4`
 - `Host` 不再从 `FinsRuntime` 拉总仓储对象，也不再持有 Agent 工具注入所需的 Fins runtime
+
+财报读取工具的累计预算由每次注册创建的 `RetrievalBudget` 持有，不放入共享的 `FinsToolService` / Processor 缓存。服务的 `resolve_ticker` 是读取与计数共同使用的公司标识真源；账本以 Host 注入的 `ToolExecutionContext.run_id` 和规范 ticker 为键，原子预留后再执行读取。没有执行上下文的直接工具调用以当前工具集为作用域。新工具集和新 run 独立计数，进程恢复重新装配时不恢复此前消耗；这不是持久化配额。
+
+`list_documents`、`get_document_sections`、`search_document`、`read_section`、`list_tables`、`get_table`、`get_page_content` 共用每公司默认 16 次额度。失败尝试也占额度，批量 `queries` 按工具调用计一次。章节精读计入以堵住遍历路径；`get_financial_statement` / `query_xbrl_facts` 属于结构化取数，保留为预算耗尽后的数值补充路径，不计入检索额度。`fetch_more` 续读既有缓存，不触发新检索。财报服务直接调用路径不受 Agent 工具预算约束。
+
+耗尽时不再执行底层读取，返回 `TerminalToolResult`，由 Engine 装入成功信封 `ok=true`；这是确定的治理终态，不伪装成工具执行故障，也不触发连续失败批次降级。模型看到的业务载荷为：
+
+- `status="budget_exhausted"`、规范 `ticker`、`budget={limit, used, remaining}`。
+- `covered_scope`：已准入请求的工具名、参数范围和 `outcome`。`returned` 仅表示调用已返回，不能推断完整覆盖或存在有效证据；`failed` / `pending` 不可当作已取证。并发拒绝发生时，范围是拒绝时刻的快照。
+- `hint`：停止该公司的非结构化检索，基于现有证据作答、说明缺口，必要时改用两种结构化工具。
+- `user_notice`：耗尽提示，同时进入信封 `meta.user_notice`，由 Agent 转为去重的 WARNING，沿现有 Host / side message 路径展示。
+
+治理终态跳过正文截断，不产生续读游标。工具参数 schema 保持不变；预算配置见[配置手册](../config/README.md#54-fins_tool_limits)。预算限制实际读取次数，不能保证模型一定停止发起被拒绝的调用，Agent 原有轮次、重复调用及取消治理继续生效。
 
 ### 4.2 Prompt Contributions
 

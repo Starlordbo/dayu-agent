@@ -19,6 +19,7 @@ from streamlit.testing.v1.element_tree import Block
 from dayu.contracts.events import AppEvent, AppEventType
 from dayu.contracts.agent_types import AgentMessage, JsonValue
 from dayu.contracts.protocols import ToolExecutor
+from dayu.contracts.tool_configs import FinsToolLimits
 from dayu.engine.async_agent import AgentRunningConfig, AsyncAgent
 from dayu.engine.events import (
     EventType, StreamEvent, content_complete, content_delta, done_event,
@@ -722,6 +723,14 @@ def test_cross_company_budget_warning_survives_terminal_redraw(
     assert errors[0]["error"] == "invalid_argument"
     assert "GOOGL" in errors[0]["message"] and "AMZN" in errors[0]["message"]
     assert "list_documents" in errors[0]["hint"]
+    retrieval_limit = FinsToolLimits().retrieval_budget_per_ticker
+    for ticker in _COMPARISON_TICKERS:
+        company_results = [event.data["result"] for event in runner.tool_results
+                           if event.data["arguments"]["ticker"] == ticker]
+        exhausted = [result for result in company_results
+                     if result.get("value", {}).get("status") == "budget_exhausted"]
+        assert len(exhausted) == len(company_results) - retrieval_limit
+        assert all(result["value"]["budget"]["used"] == retrieval_limit for result in exhausted)
     assert len(runner.tool_results) == _COMPARISON_MAX_CALLS
     assert runner.model_calls == _COMPARISON_MAX_CALLS // len(_COMPARISON_TICKERS) + 1
     assert events[-1].type == EventType.FINAL_ANSWER and events[-1].data["degraded"] is True
@@ -730,6 +739,10 @@ def test_cross_company_budget_warning_survives_terminal_redraw(
     answer, side_messages, filtered = fold_app_events_to_assistant_text(app_events)
     budget_warnings = [message for message in side_messages if "最大工具调用" in message]
     assert len(budget_warnings) == 1 and "现有上下文" in budget_warnings[0]
+    retrieval_warnings = [message for message in side_messages if "检索预算" in message]
+    assert len(retrieval_warnings) == len(_COMPARISON_TICKERS)
+    assert all(sum(ticker in message for message in retrieval_warnings) == 1 for ticker in _COMPARISON_TICKERS)
+    assert len(side_messages) == len(retrieval_warnings) + len(budget_warnings)
     assert answer == _COMPARISON_ANSWER and filtered is False
     service = _ChatService(histories={_SESSION: [_turn(user=_COMPARISON_QUESTION, answer=answer)]})
     app = _app(service)
@@ -747,7 +760,7 @@ def test_cross_company_budget_warning_survives_terminal_redraw(
                       if isinstance(node, Block) and len(node.chat_message) == 2]
     assert len(history_blocks) == 1
     # Streamlit 将前导警告 emoji 拆为 icon，重组后严格比较完整消息。
-    assert [f"{item.proto.icon} {item.value}" for item in history_blocks[0].warning] == budget_warnings
+    assert [f"{item.proto.icon} {item.value}".strip() for item in history_blocks[0].warning] == side_messages
 
 
 def test_submit_uses_real_worker_and_service_events_without_model() -> None:

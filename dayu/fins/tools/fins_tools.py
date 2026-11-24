@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+from functools import partial
+from typing import Callable, Optional
 
+from dayu.contracts.protocols import ToolExecutionContext
 from dayu.log import Log
 from dayu.contracts.tool_configs import FinsToolLimits
-from dayu.engine.tool_contracts import ToolTruncateSpec
+from dayu.engine.tool_contracts import TerminalToolResult, ToolTruncateSpec
 from dayu.engine.tool_registry import ToolRegistry
 from dayu.engine.tools.base import tool
 from dayu.fins.ingestion.service import FinsIngestionService
@@ -25,6 +27,7 @@ from .result_types import (
     XbrlQueryResult,
 )
 from .service import FinsToolService
+from .retrieval_budget import BudgetExhaustedResult, RetrievalBudget
 
 MODULE = "FINS.FINS_TOOLS"
 FINS_TOOL_TAGS = frozenset({"fins"})
@@ -79,28 +82,28 @@ def register_fins_read_tools(
     resolved_service = _resolve_service(
         service=service,
     )
+    budget = RetrievalBudget(resolved_limits.retrieval_budget_per_ticker, resolved_service.resolve_ticker)
 
-    # 读取工具工厂函数列表（按注册顺序）
-    read_tool_factories = [
-        _create_list_documents_tool,
-        _create_get_document_sections_tool,
-        _create_read_section_tool,
-        _create_search_document_tool,
-        _create_list_tables_tool,
-        _create_get_table_tool,
-        _create_get_page_content_tool,
-        _create_get_financial_statement_tool,
-        _create_query_xbrl_facts_tool,
+    # 读取工具注册函数列表（按注册顺序）
+    read_tool_registrars = [
+        partial(_register_list_documents_tool, budget=budget),
+        partial(_register_get_document_sections_tool, budget=budget),
+        partial(_register_read_section_tool, budget=budget),
+        partial(_register_search_document_tool, budget=budget),
+        partial(_register_list_tables_tool, budget=budget),
+        partial(_register_get_table_tool, budget=budget),
+        partial(_register_get_page_content_tool, budget=budget),
+        _register_get_financial_statement_tool,
+        _register_query_xbrl_facts_tool,
     ]
 
     del timeout_budget
 
     # 批量注册读取工具。读工具已统一收口为单一 fins 标签。
-    for factory in read_tool_factories:
-        name, func, schema = factory(registry, resolved_service, resolved_limits)
-        registry.register(name, func, schema)
+    for register_tool in read_tool_registrars:
+        register_tool(registry, resolved_service, resolved_limits)
 
-    Log.verbose(f"已注册 {len(read_tool_factories)} 个财报读取工具", module=MODULE)
+    Log.verbose(f"已注册 {len(read_tool_registrars)} 个财报读取工具", module=MODULE)
 
 
 def register_fins_ingestion_tools(
@@ -136,20 +139,23 @@ def register_fins_ingestion_tools(
     return tool_count
 
 
-def _create_list_documents_tool(
+def _register_list_documents_tool(
     registry: ToolRegistry,
     service: FinsToolService,
     limits: FinsToolLimits,
-) -> tuple[str, Any, Any]:
-    """创建 `list_documents` 工具。
+    *,
+    budget: RetrievalBudget,
+) -> None:
+    """注册 `list_documents` 工具。
 
     Args:
         registry: 工具注册表实例。
         service: 财报工具服务实例。
         limits: 财报工具限制配置。
+        budget: 当前工具集共享的累计检索预算。
 
     Returns:
-        `(tool_name, tool_callable, tool_schema)` 三元组。
+        无。
 
     Raises:
         ValueError: 工具 schema 非法时抛出。
@@ -203,6 +209,7 @@ def _create_list_documents_tool(
         ),
         parameters=parameters,
         tags=FINS_TOOL_TAGS,
+        execution_context_param_name="execution_context",
         display_name="列出文档",
         summary_params=["ticker"],
         truncate=ToolTruncateSpec(
@@ -217,7 +224,9 @@ def _create_list_documents_tool(
         document_types: Optional[list[str]] = None,
         fiscal_years: Optional[list[int]] = None,
         fiscal_periods: Optional[list[str]] = None,
-    ) -> ListDocumentsResult:
+        *,
+        execution_context: ToolExecutionContext | None = None,
+    ) -> ListDocumentsResult | TerminalToolResult[BudgetExhaustedResult]:
         """列出可用文档。
 
         Args:
@@ -225,38 +234,46 @@ def _create_list_documents_tool(
             document_types: 可选文档类型过滤（枚举数组）。
             fiscal_years: 可选财年过滤。
             fiscal_periods: 可选财期过滤。
+            execution_context: Host 注入的单次调用上下文。
 
         Returns:
-            文档列表结果。
+            文档列表或预算耗尽结果。
 
         Raises:
             ToolArgumentError: 参数非法时抛出。
         """
 
-        return service.list_documents(
-            ticker=ticker,
-            document_types=document_types,
-            fiscal_years=fiscal_years,
-            fiscal_periods=fiscal_periods,
+        return budget.execute(
+            ticker=ticker, tool_name="list_documents", context=execution_context,
+            arguments={
+                "document_types": list(document_types) if document_types is not None else None,
+                "fiscal_years": list(fiscal_years) if fiscal_years is not None else None,
+                "fiscal_periods": list(fiscal_periods) if fiscal_periods is not None else None,
+            },
+            operation=partial(service.list_documents, ticker=ticker, document_types=document_types,
+                              fiscal_years=fiscal_years, fiscal_periods=fiscal_periods),
         )
 
-    return list_documents.__tool_name__, list_documents, list_documents.__tool_schema__
+    registry.register(list_documents.__tool_name__, list_documents, list_documents.__tool_schema__)
 
 
-def _create_get_document_sections_tool(
+def _register_get_document_sections_tool(
     registry: ToolRegistry,
     service: FinsToolService,
     limits: FinsToolLimits,
-) -> tuple[str, Any, Any]:
-    """创建 `get_document_sections` 工具。
+    *,
+    budget: RetrievalBudget,
+) -> None:
+    """注册 `get_document_sections` 工具。
 
     Args:
         registry: 工具注册表实例。
         service: 财报工具服务实例。
         limits: 财报工具限制配置。
+        budget: 当前工具集共享的累计检索预算。
 
     Returns:
-        `(tool_name, tool_callable, tool_schema)` 三元组。
+        无。
 
     Raises:
         ValueError: 工具 schema 非法时抛出。
@@ -281,6 +298,7 @@ def _create_get_document_sections_tool(
         description="读取文档章节结构，返回可定位的章节 ref 列表。",
         parameters=parameters,
         tags=FINS_TOOL_TAGS,
+        execution_context_param_name="execution_context",
         display_name="浏览财报结构",
         summary_params=["ticker"],
         truncate=ToolTruncateSpec(
@@ -290,39 +308,49 @@ def _create_get_document_sections_tool(
             target_field="sections",
         ),
     )
-    def get_document_sections(ticker: str, document_id: str) -> DocumentSectionsResult:
+    def get_document_sections(
+        ticker: str, document_id: str, *, execution_context: ToolExecutionContext | None = None,
+    ) -> DocumentSectionsResult | TerminalToolResult[BudgetExhaustedResult]:
         """获取文档章节结构。
 
         Args:
             ticker: 股票代码。
             document_id: 文档 ID。
+            execution_context: Host 注入的单次调用上下文。
 
         Returns:
-            章节结构结果。
+            章节结构或预算耗尽结果。
 
         Raises:
             ToolArgumentError: 参数非法时抛出。
         """
 
-        return service.get_document_sections(ticker=ticker, document_id=document_id)
+        return budget.execute(
+            ticker=ticker, tool_name="get_document_sections", context=execution_context,
+            arguments={"document_id": document_id},
+            operation=partial(service.get_document_sections, ticker=ticker, document_id=document_id),
+        )
 
-    return get_document_sections.__tool_name__, get_document_sections, get_document_sections.__tool_schema__
+    registry.register(get_document_sections.__tool_name__, get_document_sections, get_document_sections.__tool_schema__)
 
 
-def _create_read_section_tool(
+def _register_read_section_tool(
     registry: ToolRegistry,
     service: FinsToolService,
     limits: FinsToolLimits,
-) -> tuple[str, Any, Any]:
-    """创建 `read_section` 工具。
+    *,
+    budget: RetrievalBudget,
+) -> None:
+    """注册 `read_section` 工具。
 
     Args:
         registry: 工具注册表实例。
         service: 财报工具服务实例。
         limits: 财报工具限制配置。
+        budget: 当前工具集共享的累计检索预算。
 
     Returns:
-        `(tool_name, tool_callable, tool_schema)` 三元组。
+        无。
 
     Raises:
         ValueError: 工具 schema 非法时抛出。
@@ -351,6 +379,7 @@ def _create_read_section_tool(
         description="读取章节全文。若正文里出现 [[t_XXXX]]，可用 get_table(t_XXXX) 读取对应表格。",
         parameters=parameters,
         tags=FINS_TOOL_TAGS,
+        execution_context_param_name="execution_context",
         display_name="读取财报章节",
         truncate=ToolTruncateSpec(
             enabled=True,
@@ -363,43 +392,49 @@ def _create_read_section_tool(
         ticker: str,
         document_id: str,
         ref: str,
-        **_kwargs,
-    ) -> SectionContentResult:
+        *,
+        execution_context: ToolExecutionContext | None = None,
+    ) -> SectionContentResult | TerminalToolResult[BudgetExhaustedResult]:
         """读取章节正文。
 
         Args:
             ticker: 股票代码。
             document_id: 文档 ID。
             ref: 章节引用。
-            **_kwargs: 历史兼容参数（如 within_section_ref），均被忽略。
+            execution_context: Host 注入的单次调用上下文。
 
         Returns:
-            章节内容结果。
+            章节内容或预算耗尽结果。
 
         Raises:
             ToolArgumentError: 参数非法时抛出。
         """
-        _ = _kwargs
+        return budget.execute(
+            ticker=ticker, tool_name="read_section", context=execution_context,
+            arguments={"document_id": document_id, "ref": ref},
+            operation=partial(service.read_section, ticker=ticker, document_id=document_id, ref=ref),
+        )
 
-        return service.read_section(ticker=ticker, document_id=document_id, ref=ref)
-
-    return read_section.__tool_name__, read_section, read_section.__tool_schema__
+    registry.register(read_section.__tool_name__, read_section, read_section.__tool_schema__)
 
 
-def _create_search_document_tool(
+def _register_search_document_tool(
     registry: ToolRegistry,
     service: FinsToolService,
     limits: FinsToolLimits,
-) -> tuple[str, Any, Any]:
-    """创建 `search_document` 工具。
+    *,
+    budget: RetrievalBudget,
+) -> None:
+    """注册 `search_document` 工具。
 
     Args:
         registry: 工具注册表实例。
         service: 财报工具服务实例。
         limits: 财报工具限制配置。
+        budget: 当前工具集共享的累计检索预算。
 
     Returns:
-        `(tool_name, tool_callable, tool_schema)` 三元组。
+        无。
 
     Raises:
         ValueError: 工具 schema 非法时抛出。
@@ -442,6 +477,7 @@ def _create_search_document_tool(
         ),
         parameters=parameters,
         tags=FINS_TOOL_TAGS,
+        execution_context_param_name="execution_context",
         display_name="检索文档",
         summary_params=["query"],
         truncate=ToolTruncateSpec(
@@ -463,7 +499,9 @@ def _create_search_document_tool(
         queries: Optional[list[str]] = None,
         within_section_ref: Optional[str] = None,
         mode: Optional[str] = None,
-    ) -> SearchDocumentResult:
+        *,
+        execution_context: ToolExecutionContext | None = None,
+    ) -> SearchDocumentResult | TerminalToolResult[BudgetExhaustedResult]:
         """搜索文档。
 
         Args:
@@ -473,44 +511,48 @@ def _create_search_document_tool(
             queries: 批量搜索词（与 query 互斥，上限 20 条）。
             within_section_ref: 可选章节范围。
             mode: 搜索模式（auto/exact/keyword/semantic）。
+            execution_context: Host 注入的单次调用上下文。
 
         Returns:
-            搜索结果。
+            搜索或预算耗尽结果。
 
         Raises:
             ToolArgumentError: 参数非法时抛出。
         """
 
-        result = service.search_document(
-            ticker=ticker,
-            document_id=document_id,
-            query=query,
-            queries=queries,
-            within_section_ref=within_section_ref,
-            mode=mode,
-            display_budget=limits.search_document_max_items,
+        result = budget.execute(
+            ticker=ticker, tool_name="search_document", context=execution_context,
+            arguments={"document_id": document_id, "query": query, "queries": list(queries) if queries is not None else None,
+                       "within_section_ref": within_section_ref, "mode": mode},
+            operation=partial(service.search_document, ticker=ticker, document_id=document_id,
+                              query=query, queries=queries, within_section_ref=within_section_ref,
+                              mode=mode, display_budget=limits.search_document_max_items),
         )
         # 剥离内部诊断信息，不暴露给 LLM
-        result.pop("diagnostics", None)
+        if not isinstance(result, TerminalToolResult):
+            result.pop("diagnostics", None)
         return result
 
-    return search_document.__tool_name__, search_document, search_document.__tool_schema__
+    registry.register(search_document.__tool_name__, search_document, search_document.__tool_schema__)
 
 
-def _create_list_tables_tool(
+def _register_list_tables_tool(
     registry: ToolRegistry,
     service: FinsToolService,
     limits: FinsToolLimits,
-) -> tuple[str, Any, Any]:
-    """创建 `list_tables` 工具。
+    *,
+    budget: RetrievalBudget,
+) -> None:
+    """注册 `list_tables` 工具。
 
     Args:
         registry: 工具注册表实例。
         service: 财报工具服务实例。
         limits: 财报工具限制配置。
+        budget: 当前工具集共享的累计检索预算。
 
     Returns:
-        `(tool_name, tool_callable, tool_schema)` 三元组。
+        无。
 
     Raises:
         ValueError: 工具 schema 非法时抛出。
@@ -544,6 +586,7 @@ def _create_list_tables_tool(
         description="列出文档内表格，返回可定位的 table_ref 列表。",
         parameters=parameters,
         tags=FINS_TOOL_TAGS,
+        execution_context_param_name="execution_context",
         display_name="列出表格",
         summary_params=["ticker"],
         truncate=ToolTruncateSpec(
@@ -563,7 +606,9 @@ def _create_list_tables_tool(
         document_id: str,
         financial_only: bool = False,
         within_section_ref: Optional[str] = None,
-    ) -> TablesListResult:
+        *,
+        execution_context: ToolExecutionContext | None = None,
+    ) -> TablesListResult | TerminalToolResult[BudgetExhaustedResult]:
         """列出表格。
 
         Args:
@@ -571,38 +616,42 @@ def _create_list_tables_tool(
             document_id: 文档 ID。
             financial_only: 是否仅返回财务表。
             within_section_ref: 可选章节范围。
+            execution_context: Host 注入的单次调用上下文。
 
         Returns:
-            表格列表结果。
+            表格列表或预算耗尽结果。
 
         Raises:
             ToolArgumentError: 参数非法时抛出。
         """
 
-        return service.list_tables(
-            ticker=ticker,
-            document_id=document_id,
-            financial_only=financial_only,
-            within_section_ref=within_section_ref,
+        return budget.execute(
+            ticker=ticker, tool_name="list_tables", context=execution_context,
+            arguments={"document_id": document_id, "financial_only": financial_only, "within_section_ref": within_section_ref},
+            operation=partial(service.list_tables, ticker=ticker, document_id=document_id,
+                              financial_only=financial_only, within_section_ref=within_section_ref),
         )
 
-    return list_tables.__tool_name__, list_tables, list_tables.__tool_schema__
+    registry.register(list_tables.__tool_name__, list_tables, list_tables.__tool_schema__)
 
 
-def _create_get_table_tool(
+def _register_get_table_tool(
     registry: ToolRegistry,
     service: FinsToolService,
     limits: FinsToolLimits,
-) -> tuple[str, Any, Any]:
-    """创建 `get_table` 工具。
+    *,
+    budget: RetrievalBudget,
+) -> None:
+    """注册 `get_table` 工具。
 
     Args:
         registry: 工具注册表实例。
         service: 财报工具服务实例。
         limits: 财报工具限制配置。
+        budget: 当前工具集共享的累计检索预算。
 
     Returns:
-        `(tool_name, tool_callable, tool_schema)` 三元组。
+        无。
 
     Raises:
         ValueError: 工具 schema 非法时抛出。
@@ -631,6 +680,7 @@ def _create_get_table_tool(
         description="按 table_ref 读取单个表格。",
         parameters=parameters,
         tags=FINS_TOOL_TAGS,
+        execution_context_param_name="execution_context",
         display_name="查看表格",
         truncate=ToolTruncateSpec(
             enabled=True,
@@ -638,40 +688,50 @@ def _create_get_table_tool(
             limits={"max_items": limits.get_table_max_items},
         ),
     )
-    def get_table(ticker: str, document_id: str, table_ref: str) -> TableDetailResult:
+    def get_table(
+        ticker: str, document_id: str, table_ref: str, *, execution_context: ToolExecutionContext | None = None,
+    ) -> TableDetailResult | TerminalToolResult[BudgetExhaustedResult]:
         """读取表格。
 
         Args:
             ticker: 股票代码。
             document_id: 文档 ID。
             table_ref: 表格引用。
+            execution_context: Host 注入的单次调用上下文。
 
         Returns:
-            表格结果。
+            表格或预算耗尽结果。
 
         Raises:
             ToolArgumentError: 参数非法时抛出。
         """
 
-        return service.get_table(ticker=ticker, document_id=document_id, table_ref=table_ref)
+        return budget.execute(
+            ticker=ticker, tool_name="get_table", context=execution_context,
+            arguments={"document_id": document_id, "table_ref": table_ref},
+            operation=partial(service.get_table, ticker=ticker, document_id=document_id, table_ref=table_ref),
+        )
 
-    return get_table.__tool_name__, get_table, get_table.__tool_schema__
+    registry.register(get_table.__tool_name__, get_table, get_table.__tool_schema__)
 
 
-def _create_get_page_content_tool(
+def _register_get_page_content_tool(
     registry: ToolRegistry,
     service: FinsToolService,
     limits: FinsToolLimits,
-) -> tuple[str, Any, Any]:
-    """创建 `get_page_content` 工具。
+    *,
+    budget: RetrievalBudget,
+) -> None:
+    """注册 `get_page_content` 工具。
 
     Args:
         registry: 工具注册表实例。
         service: 财报工具服务实例。
         limits: 财报工具限制配置。
+        budget: 当前工具集共享的累计检索预算。
 
     Returns:
-        `(tool_name, tool_callable, tool_schema)` 三元组。
+        无。
 
     Raises:
         ValueError: 工具 schema 非法时抛出。
@@ -697,6 +757,7 @@ def _create_get_page_content_tool(
         description="按页码读取同页内容。只有已有 page_range 且需要补同页上下文时才使用。",
         parameters=parameters,
         tags=FINS_TOOL_TAGS,
+        execution_context_param_name="execution_context",
         display_name="读取页面",
         summary_params=["ticker"],
         truncate=ToolTruncateSpec(
@@ -706,32 +767,39 @@ def _create_get_page_content_tool(
             target_field="text_preview",
         ),
     )
-    def get_page_content(ticker: str, document_id: str, page_no: int) -> PageContentResult | NotSupportedResult:
+    def get_page_content(
+        ticker: str, document_id: str, page_no: int, *, execution_context: ToolExecutionContext | None = None,
+    ) -> PageContentResult | NotSupportedResult | TerminalToolResult[BudgetExhaustedResult]:
         """读取页面内容。
 
         Args:
             ticker: 股票代码。
             document_id: 文档 ID。
             page_no: 页码。
+            execution_context: Host 注入的单次调用上下文。
 
         Returns:
-            页面内容结果。
+            页面内容、能力不支持或预算耗尽结果。
 
         Raises:
             ToolArgumentError: 参数非法时抛出。
         """
 
-        return service.get_page_content(ticker=ticker, document_id=document_id, page_no=page_no)
+        return budget.execute(
+            ticker=ticker, tool_name="get_page_content", context=execution_context,
+            arguments={"document_id": document_id, "page_no": page_no},
+            operation=partial(service.get_page_content, ticker=ticker, document_id=document_id, page_no=page_no),
+        )
 
-    return get_page_content.__tool_name__, get_page_content, get_page_content.__tool_schema__
+    registry.register(get_page_content.__tool_name__, get_page_content, get_page_content.__tool_schema__)
 
 
-def _create_get_financial_statement_tool(
+def _register_get_financial_statement_tool(
     registry: ToolRegistry,
     service: FinsToolService,
     limits: FinsToolLimits,
-) -> tuple[str, Any, Any]:
-    """创建 `get_financial_statement` 工具。
+) -> None:
+    """注册 `get_financial_statement` 工具。
 
     Args:
         registry: 工具注册表实例。
@@ -739,7 +807,7 @@ def _create_get_financial_statement_tool(
         limits: 财报工具限制配置。
 
     Returns:
-        `(tool_name, tool_callable, tool_schema)` 三元组。
+        无。
 
     Raises:
         ValueError: 工具 schema 非法时抛出。
@@ -801,15 +869,15 @@ def _create_get_financial_statement_tool(
             statement_type=statement_type,
         )
 
-    return get_financial_statement.__tool_name__, get_financial_statement, get_financial_statement.__tool_schema__
+    registry.register(get_financial_statement.__tool_name__, get_financial_statement, get_financial_statement.__tool_schema__)
 
 
-def _create_query_xbrl_facts_tool(
+def _register_query_xbrl_facts_tool(
     registry: ToolRegistry,
     service: FinsToolService,
     limits: FinsToolLimits,
-) -> tuple[str, Any, Any]:
-    """创建 `query_xbrl_facts` 工具。
+) -> None:
+    """注册 `query_xbrl_facts` 工具。
 
     Args:
         registry: 工具注册表实例。
@@ -817,7 +885,7 @@ def _create_query_xbrl_facts_tool(
         limits: 财报工具限制配置。
 
     Returns:
-        `(tool_name, tool_callable, tool_schema)` 三元组。
+        无。
 
     Raises:
         ValueError: 工具 schema 非法时抛出。
@@ -906,4 +974,4 @@ def _create_query_xbrl_facts_tool(
             max_value=max_value,
         )
 
-    return query_xbrl_facts.__tool_name__, query_xbrl_facts, query_xbrl_facts.__tool_schema__
+    registry.register(query_xbrl_facts.__tool_name__, query_xbrl_facts, query_xbrl_facts.__tool_schema__)

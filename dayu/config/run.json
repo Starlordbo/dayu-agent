@@ -35,6 +35,7 @@
     "read_file_section_max_chars": 50000
   },
   "fins_tool_limits": {
+    "retrieval_budget_per_ticker": 16,
     "processor_cache_max_entries": 128,
     "list_documents_max_items": 300,
     "get_document_sections_max_items": 1200,
