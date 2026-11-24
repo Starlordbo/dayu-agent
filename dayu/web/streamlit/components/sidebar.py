@@ -12,6 +12,7 @@ from typing import Callable
 import streamlit as st
 
 from dayu.web.streamlit.components.watchlist import WatchlistItem, load_watchlist_items, render_watchlist_manager
+from dayu.web.streamlit.navigation import TICKER_QUERY_KEY
 
 
 def render_sidebar(
@@ -25,7 +26,9 @@ def render_sidebar(
         on_select_callback: 选中自选股后的回调函数，接收 WatchlistItem 参数。
 
     返回值:
-        当前选中的自选股条目，未选中时返回 None。
+        URL 或页面状态中选定且仍在自选股中的条目；未选中或失效时返回 None。
+    异常:
+        无；自选股加载失败在侧栏显示错误。
     """
 
     st.sidebar.title("大禹 Agent")
@@ -58,9 +61,8 @@ def render_sidebar(
         unsafe_allow_html=True,
     )
 
-    # 检查是否需要刷新数据（对话框保存后设置）
-    refresh_key = "watchlist_needs_refresh"
-    needs_refresh = st.session_state.pop(refresh_key, False)
+    # 每次从持久化自选股核对选择，对话框与外部改动均不能留下失效公司。
+    st.session_state.pop("watchlist_needs_refresh", None)
 
     # 获取自选股列表（从文件读取）
     try:
@@ -69,28 +71,27 @@ def render_sidebar(
         st.sidebar.error(f"加载自选股失败: {e}")
         watchlist = []
 
-    # 初始化选中状态
-    if "selected_ticker" not in st.session_state:
-        st.session_state["selected_ticker"] = None
-
-    # 如果刷新了数据，检查当前选中的股票是否还在列表中，不在则清除选中状态
-    selected_ticker = st.session_state.get("selected_ticker")
-    if needs_refresh:
-        if selected_ticker is not None and not any(item.ticker == selected_ticker for item in watchlist):
-            st.session_state["selected_ticker"] = None
+    # URL 是跨刷新/新会话的返回上下文；来源公司的 source_ticker 不能参与选股。
+    requested_ticker = st.query_params.get(TICKER_QUERY_KEY)
+    selected_ticker = requested_ticker if requested_ticker is not None else st.session_state.get("selected_ticker")
+    selected_item = next((item for item in watchlist if item.ticker == selected_ticker), None)
+    st.session_state["selected_ticker"] = selected_item.ticker if selected_item is not None else None
+    if selected_item is not None:
+        st.query_params[TICKER_QUERY_KEY] = selected_item.ticker
+    elif requested_ticker:
+        st.sidebar.warning("返回链接中的公司不在当前自选股中，请重新选择或添加；不会自动切换到来源公司。")
 
     # 自选股标题行：左侧标题，右侧管理按钮（icon 按钮，更小）
     col1, col2 = st.sidebar.columns([5, 1], vertical_alignment="center")
     with col1:
         st.markdown("**❤️ 自选股**")
-   
+
     with col2:
         if st.button("", key="manage_watchlist_btn", icon=":material/list_alt_add:", type="tertiary", help="管理自选股"):
             # 调用对话框函数（装饰器会自动处理）
             render_watchlist_manager(workspace_root)
 
     # 展示自选股列表
-    selected_item = None
     for item in watchlist:
         display_name = f"{item.company_name} ({item.ticker})"
         current_selected_ticker = st.session_state.get("selected_ticker")
@@ -100,6 +101,7 @@ def render_sidebar(
         button_type = "primary" if is_selected else "secondary"
         if st.sidebar.button(display_name, key=f"stock_{item.ticker}", type=button_type, width="stretch"):
             st.session_state["selected_ticker"] = item.ticker
+            st.query_params[TICKER_QUERY_KEY] = item.ticker
             selected_item = item
             if on_select_callback:
                 on_select_callback(item)
@@ -109,14 +111,5 @@ def render_sidebar(
         st.sidebar.info("暂无自选股，请点击管理按钮添加")
 
     st.sidebar.markdown("---")
-
-    # 返回当前选中的条目
-    current_selected_ticker = st.session_state.get("selected_ticker")
-    if isinstance(current_selected_ticker, str) and current_selected_ticker and not selected_item:
-        # 从列表中找到选中的条目
-        for item in watchlist:
-            if item.ticker == current_selected_ticker:
-                selected_item = item
-                break
 
     return selected_item

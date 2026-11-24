@@ -30,6 +30,7 @@ from dayu.fins.upload_recognition import infer_earnings_call_fiscal
 from dayu.services.contracts import FinsSubmitRequest
 from dayu.services.protocols import FinsServiceProtocol
 from dayu.web.streamlit.components.watchlist import WatchlistItem
+from dayu.web.streamlit.navigation import TICKER_QUERY_KEY, VIEW_QUERY_KEY, StockView
 
 STATUS_UPLOADING = "uploading"
 STATUS_PROCESSING = "processing"
@@ -404,7 +405,10 @@ def _render_material_catalog(ticker: str, service: FinsServiceProtocol) -> None:
             source_type="SUPPLEMENTARY", ticker=material.ticker, document_id=material.document_id
         ).to_dict()["source_marker"]
         st.write(material.material_name or material.document_id)
-        st.markdown(render_citation_links(str(marker), st.query_params.to_dict()))
+        st.markdown(render_citation_links(
+            str(marker),
+            st.query_params.to_dict() | {TICKER_QUERY_KEY: ticker, VIEW_QUERY_KEY: StockView.MATERIALS},
+        ))
 
 
 def render_material_tab(

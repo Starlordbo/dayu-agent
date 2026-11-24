@@ -170,7 +170,7 @@ def test_catalog_uses_persisted_title_and_document_link(
     assert len(links) == 1
     query = parse_qs(urlsplit(links[0].removeprefix("[文档来源](").removesuffix(")")).query)
     assert query == {
-        "chat_tab_AAPL_session": ["existing-chat-session"],
+        "chat_tab_AAPL_session": ["existing-chat-session"], "ticker": ["AAPL"], "view": ["materials"],
         "source_ticker": ["AAPL"], "source_document": [row.document_id],
     }
     assert len(app.text_input) == (4 if has_files else 0)

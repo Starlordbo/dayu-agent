@@ -240,9 +240,11 @@ def test_history_and_stream_frames_share_conversion(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(chat_tab, "st", ui)
     content = "结论：" + _SECTION_MARKER
     reasoning = "内部思考 " + _DOCUMENT_MARKER
-    expected = render_citation_links(content, query)
+    expected = render_citation_links(content, query | {"ticker": "MSFT", "view": "analysis"})
     message = chat_tab.ChatMessage(role="assistant", content=content, reasoning_content=reasoning)
-    chat_tab._render_message_history([chat_tab.ChatMessage(role="user", content=_DOCUMENT_MARKER), message])
+    chat_tab._render_message_history(
+        [chat_tab.ChatMessage(role="user", content=_DOCUMENT_MARKER), message], ticker="MSFT",
+    )
     assert ui.markdown.call_args_list == [call(_DOCUMENT_MARKER), call(reasoning), call(expected)]
     assert message.content == content
     for done in (False, True):
@@ -251,7 +253,7 @@ def test_history_and_stream_frames_share_conversion(monkeypatch: pytest.MonkeyPa
             trace_id="trace", session_id="existing-session", reasoning_text=reasoning,
             answer_text=content, side_messages=[], filtered_flags=[], done=done, error_message="",
         )
-        chat_tab._render_stream_frame(title="思考内容", state=state)
+        chat_tab._render_stream_frame(title="思考内容", state=state, ticker="MSFT")
         assert ui.markdown.call_args_list == [call(reasoning), call(expected)]
         assert state.answer_text == content
     assert ui.query_params.to_dict.call_count == 3

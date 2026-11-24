@@ -139,6 +139,29 @@ P1 相关与既有上传测试不得新增失败：
 
 独立复核发现的身份继承泄漏与连续目录选择失效均已修复，原反例复验通过。既有11个模型白名单失败归因后只修正测试与覆盖隔离断言，不改变默认模型。
 
+### P2 下一轮：重建与返回导航（2026-11-23，基于 `f82b09b` 的未提交增量）
+
+分工：Codex 在独立 `codex/p2-format-reload` worktree 增补格式回归；主会话负责 W5–W7 的直接证据与导航修复；DeepSeek 只读机械回归；Astra 独立复核生产导航与跨公司返回反例。
+
+- 四格式新增两组各4参数用例：`test_four_formats_new_runtime_preserves_references_and_deduplicates`、`test_four_formats_new_runtime_isolates_same_document_id_by_company`。验证同工作区全新 Runtime/Service 读取、原件/源 meta/转换产物不变、同指纹重传和 version_matched 处理不增加第二份材料、跨公司相同 ID 交替读取隔离。MD/TXT 派生不同临时正文；DOCX/PDF 相同字节只证明身份隔离。明确区分目录可见与处理就绪。
+- W5 直接红测证明：仅保留聊天 session 参数不足以恢复新页面的选股；已增加独立原公司 `ticker` 与功能页 `view`，不从 `source_ticker` 推断原公司。真实侧栏从持久自选股恢复并核对有效性，URL 覆盖陈旧选股，删除目标不静默回退。
+- 第二条红测证明：原会话恢复曾被嵌套在“有可选模型”分支内，目录为空时读错公司默认会话；现已独立恢复 URL session。
+- `test_cross_company_source_returns_to_fresh_main_and_original_chat` 两个文档/章节参数均通过：真实 `main` / 侧栏 / 主页面 / 聊天生成 MSFT→AAPL 链接，经实际查看器返回 URL，重新建立无选股缓存的 AppTest，恢复 MSFT 的非默认会话与分析默认 Tab。无关 Tab 和模型目录被隔离，不提交模型/上传/处理。
+- `test_streamlit_navigation.py` 的17例覆盖 URL、持久自选股、删除/失效、侧栏按钮与四个合法/非法功能页默认 protobuf。材料链接固定返回会议纪要；聊天链接固定返回交互式分析。**view 只设置返回时默认页，不承诺任意手动切 Tab 后实时同步 URL。**
+- W6/W7 保持既有范围与角色契约，未放宽识别规则；94例身份片段回归、查看器角色证据及四格式原文对照继续通过。
+
+| 检查 | 本轮结果与口径 |
+|---|---|
+| 起点核心基线（Codex worktree，engine/fins/contracts/services/architecture） | 4089 passed，2 skipped，4 warnings；非整合后重跑 |
+| 整合后 application + 身份片段回归 | 1293 passed，4 warnings；包含94例身份片段，与核心基线有重叠，不能直接相加 |
+| 主会话审查后复验 navigation / source_routing / material_upload_integration | 50 passed，4 warnings；已包含在上一行，不另累计 |
+| 全仓 pyright | 0 errors / 0 warnings / 0 informations |
+| 本轮6个生产 Python 文件的行+分支合并覆盖率 | navigation、sidebar、main_page、source_viewer 各100%；chat_tab 97.61%；material_tab 94.65%；逐文件均≥80% |
+
+核心两项跳过原因仍是已安装 aiohttp 导致 ImportError 场景跳过、线程安全日志测试按既有开关关闭；PDF 警告来自 Docling `generate_table_images` 弃用提示。首次本轮定向测试另有6个测试失败，根因是新测试访问错误的 Tab protobuf 层级，改为 `.proto.tab_container.default_tab_index` 后50项复验与1293项整合回归通过；未因此修改生产默认页逻辑。
+
+主工作区证据保存在 `workspace/tmp/p2-round2/`：`integration-reviewed.log`、`application-final.log`、`pyright-final.log`、`coverage-application-final.json`；核心基线在独立 Codex worktree 的同名目录内。Astra 独立 AppTest 复现跨公司来源→返回→新会话链路通过，未发现新增生产阻断项。所有日志/临时脚本/覆盖率不提交。本轮没有 commit/push，未执行浏览器验收或真实模型请求。
+
 ## 7. 未完成的产品验收
 
 - 未执行真实浏览器多文件上传、点击来源、前进/后退/刷新及真实模型答案引用验收；AppTest/Runtime 集成不替代这些步骤。

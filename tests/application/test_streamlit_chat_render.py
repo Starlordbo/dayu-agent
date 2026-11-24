@@ -199,6 +199,24 @@ def _app(service: _ChatService | None, models: tuple[str, ...] = ("offline-model
     return app
 
 
+def test_return_session_survives_empty_model_catalog() -> None:
+    """可选模型为空也必须沿用 URL 会话，不能静默回到公司默认历史。
+
+    Args:
+        无。
+    Returns:
+        无。
+    Raises:
+        AssertionError: 返回后读取了错误会话或启动了模型请求时抛出。
+    """
+    service = _ChatService(histories={_SESSION: [_turn()]})
+    app = _app(service, models=()).run()
+    assert not app.exception
+    assert service.reads and all(session == _SESSION for session, _ in service.reads)
+    _assert_assistant_citation(app)
+    assert service.submissions == []
+
+
 def _assert_assistant_citation(app: AppTest) -> None:
     """断言页面实际输出可解析的来源链接，且用户原文保持不变。
 
@@ -216,7 +234,7 @@ def _assert_assistant_citation(app: AppTest) -> None:
     match = re.search(r"\[章节来源\]\(([^)]+)\)", rendered[0])
     assert match is not None
     assert parse_qs(urlsplit(match.group(1)).query) == {
-        "chat_tab_AAPL_session": [_SESSION], "view": ["analysis"],
+        "chat_tab_AAPL_session": [_SESSION], "view": ["analysis"], "ticker": [_TICKER],
         "source_ticker": [_TICKER], "source_document": ["mat_call"], "source_ref": ["qa"],
     }
     assert _USER in markdowns
@@ -297,6 +315,7 @@ def test_empty_or_unreadable_history_shows_welcome_and_repairs_cache(history_err
     """
     service = _ChatService(history_error=history_error)
     app = _app(service, models=())
+    del app.query_params["chat_tab_AAPL_session"]
     app.session_state[_MESSAGES] = "损坏的旧缓存"
     app.run()
     assert not app.exception and not app.error

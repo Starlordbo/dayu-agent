@@ -88,7 +88,7 @@ def render_source_viewer(
         无；读取失败显示明确错误，不伪造原文。
     """
     back_params = {key: value for key, value in query_params.items() if not key.startswith("source_")}
-    st.link_button("返回分析", "?" + urlencode(back_params))
+    st.link_button("返回来源页面", "?" + urlencode(back_params))
     try:
         view = service.resolve_document_reference(request)
         info = view.info

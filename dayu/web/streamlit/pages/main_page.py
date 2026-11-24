@@ -15,6 +15,7 @@ from dayu.services.protocols import (
     WriteServiceProtocol,
 )
 from dayu.web.streamlit.components.watchlist import WatchlistItem
+from dayu.web.streamlit.navigation import VIEW_QUERY_KEY, StockView
 from dayu.web.streamlit.pages.chat_tab import render_chat_tab
 from dayu.web.streamlit.pages.filing_tab import render_filing_tab
 from dayu.web.streamlit.pages.material_tab import render_material_tab
@@ -69,6 +70,7 @@ def render_stock_detail_page(
         fins_service: 财报服务协议实例。
         chat_service: 聊天服务协议实例。
         write_service: 写作服务协议实例。
+        model_names: 可选择的对话模型名称。
 
     返回值:
         无。
@@ -77,7 +79,15 @@ def render_stock_detail_page(
         无。
     """
 
-    tabs = st.tabs(["🧾 财报管理", "🧠 交互式分析", "📊 分析报告", "📞 会议纪要"])
+    view_labels = {
+        StockView.FILINGS: "🧾 财报管理",
+        StockView.ANALYSIS: "🧠 交互式分析",
+        StockView.REPORTS: "📊 分析报告",
+        StockView.MATERIALS: "📞 会议纪要",
+    }
+    requested_view = st.query_params.get(VIEW_QUERY_KEY, StockView.FILINGS)
+    default_label = next((label for view, label in view_labels.items() if view == requested_view), None)
+    tabs = st.tabs(list(view_labels.values()), default=default_label)
 
     with tabs[0]:
         render_filing_tab(

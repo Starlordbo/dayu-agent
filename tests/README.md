@@ -557,12 +557,13 @@ DAYU_RUN_LIVE_API=1 EDGAR_LOCAL_DATA_DIR="$PWD/workspace/tmp/edgar" \
 ## 纪要上传与原文引用测试
 
 - `tests/fins/test_earnings_call_*.py`：财季识别、单文件决策、默认质量门、禁止破坏性覆盖、严格身份行解析。覆盖身份与问句形式独立、未知身份、原文连续范围。
-- `tests/application/test_material_upload_integration.py`：真实 Runtime/Docling/仓储/预处理四格式链路；在快照导出点注入处理失败，检查重试只处理且原文件/元数据不变。宿主外壳为测试替身，不等同完整 Host/Agent 会话。
+- `tests/application/test_material_upload_integration.py`：真实 Runtime/Docling/仓储/预处理四格式链路；在快照导出点注入处理失败，检查重试只处理且原文件/元数据不变。四格式回归还分别验证同 workspace 全新 Runtime/Service 的只读定位、同指纹重传后的 ID/原件/源 meta 不变且无第二份材料，以及跨公司同名同财季同 ID 的 marker ticker、公司头与原件隔离。MD/TXT 使用临时派生正文验证内容隔离，DOCX/PDF 复用相同字节验证身份隔离。目录可见只表示入库，须另行验证处理快照与 `processed` 或 `skipped/version_matched`。读取期间阻断 Runtime 命令并断言无宿主执行或 Agent 调用；宿主外壳为测试替身，不等同完整 Host/Agent 会话或浏览器 E2E。
 - `tests/application/test_document_reference_service.py`：真实入库、重新装配后的目录、跨公司同编号隔离、删除/不完整状态、文档/章节范围、只读且零命令。必须保护 Docling 正文段落边界，禁止以宽松身份推断掩盖源文本损失。
 - `tests/application/test_streamlit_citations.py`：历史/流式/终态统一格式化，完整合法机器定位、分块输出、URL注入与代码块隔离。
 - `tests/application/test_streamlit_chat_render.py`：真实聊天 AppTest 控件及逐帧事件接线，检查用户文本不替换、历史/流式/终态来源均正确，保持会话参数；离线类型化 Service 不调用模型。
 - `tests/application/test_material_tab_render.py` 与 `test_streamlit_source_viewer.py`：无头 AppTest 验证逐文件失败/重试、编辑/去重、持久目录、来源定位/连续目录选择/刷新和角色证据。只替代浏览器上传控件，不将 AppTest 声称为真实浏览器验收。
-- `tests/application/test_streamlit_source_routing.py`：执行真实 `main()`，守住来源先于侧栏路由、缺失依赖提示、启动准备与服务缓存边界。
+- `tests/application/test_streamlit_source_routing.py`：执行真实 `main()`，守住来源先于侧栏路由、缺失依赖提示、启动准备与服务缓存边界；串联 MSFT 对话引用 AAPL → 实际查看器返回 URL → 全新 AppTest 的真实侧栏/主页面/聊天，验证无可选模型时仍恢复非默认原会话，不产生提交。
+- `tests/application/test_streamlit_navigation.py`：真实侧栏核对持久自选股、URL 优先于旧选股、失效/删除目标不回退、显式选择及管理入口；真实 Tab protobuf 默认索引覆盖合法与非法 `view`。这些不是浏览器点击/前进后退或实际焦点的证据。
 - `tests/fins/test_docling_source_boundaries.py`：同时验证引擎与业务 Docling processor 保留块内/块间换行，并约束两层 parser version，不能只提升被业务覆盖的父类版本。
 - 合成四格式样本与来源说明位于 `tests/fixtures/earnings_call/`。MD/TXT/DOCX/文字型PDF均需验证“实际42 million、分析师100 million假设、管理层否认”的原文及身份，不只检查转换成功。
 
@@ -570,7 +571,10 @@ DAYU_RUN_LIVE_API=1 EDGAR_LOCAL_DATA_DIR="$PWD/workspace/tmp/edgar" \
 
 ```bash
 source .venv/bin/activate
-EDGAR_LOCAL_DATA_DIR="$PWD/workspace/tmp/edgar" HF_HOME="$PWD/.cache/hf" \
+mkdir -p workspace/tmp
+TMPDIR="$PWD/workspace/tmp" PYTHONDONTWRITEBYTECODE=1 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
+  EDGAR_LOCAL_DATA_DIR="$PWD/workspace/tmp/edgar" HF_HOME="$PWD/.cache/hf" \
+  COVERAGE_FILE="$PWD/workspace/tmp/.coverage.format-reload" \
   python -m pytest tests/application/test_material_upload_integration.py \
     tests/application/test_document_reference_service.py \
     tests/application/test_streamlit_source_viewer.py -q -p no:cacheprovider

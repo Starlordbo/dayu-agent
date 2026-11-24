@@ -190,3 +190,13 @@ Research OS 的 `scripts/native_dayu_bridge.py` 仅作为已有协议转换经�
   - 最终日志：`workspace/tmp/p2-validation/regression-core-reviewed.log`、`regression-application-complete.log`、`regression-citation-service.log`、`pyright-complete.log`、`coverage-complete.json`；日志、缓存和运行仓储不提交。最终 diff 审查及 `git diff --check` 通过。
 - 仍未完成：真实浏览器多文件上传/来源点击/刷新返回、真实模型答案质量验收；页面目前只按文件名自动预填，标题/开场声明识别尚未接入页面自动提取。PDF只覆盖自撰单页文字样本，角色识别不支持无证据推断或跨章节身份继承。P2不能宣称全量验收，P3未实施。
 - 下一步从 `docs/p2-continuation.md` 继续，先补上述真实验证与元数据预填缺口，不直接跳到P3。
+
+### P2 下一轮：四格式重建与 W5 返回上下文（2026-11-23）
+
+- 基于 `f82b09b`；Codex 独立 worktree/分支 `codex/p2-format-reload` 先建后派活，主会话同步推进 W5–W7。整合后的改动尚未提交/推送。
+- Codex 新增8个 MD/TXT/DOCX/PDF 参数化回归：新 Runtime/Service 只读恢复、同指纹不重复入库、处理 version_matched、原件及源 meta 不变、同 ID 跨公司隔离。正文差异只由 MD/TXT 临时派生样本证明，DOCX/PDF 保持同一原件字节。
+- 主会话先用失败 AppTest 证明两个 W5 缺陷，再修复：新页面不能仅凭 session 参数恢复原公司；模型目录为空时不应丢失 URL 指定的原会话。来源链接现在独立带原公司 ticker/功能页 view，返回只移除 source_*；原公司需仍存在于持久自选股，否则提示重新选择，不切到来源公司。
+- 正式跨公司往返测试从真实 main/聊天生成链接，经查看器返回 URL，再以全新 AppTest 恢复 MSFT 原会话，原文仍按 AAPL 读取；文档级/章节级各一例。17例导航回归检查侧栏与默认 Tab protobuf。W6/W7 不另增猜测规则，继续验证明确角色、问句形式和原文范围。
+- DeepSeek 只读回归：本轮起点核心4089 passed、2 skipped；整合后 application + 94例身份片段为1293 passed、4 warnings（与核心有重叠，不相加）。主会话审查后复验50 passed。全仓 pyright 0 errors / 0 warnings / 0 informations。
+- 六个改动生产 Python 文件分别达到94.65%–100%行+分支合并覆盖率；Astra 独立跨公司返回 AppTest 复现通过，未发现新增生产阻断项。证据、失败归因和覆盖率明细见 `docs/p2-verification.md` 的“P2 下一轮”；日志位于 `workspace/tmp/p2-round2/`，不提交。
+- 浏览器视觉、实际链接/刷新/前进后退及真实模型质量仍未验收；view 仅决定返回默认页，不是实时Tab URL同步。网页正文元数据预填、OCR/复杂PDF、无明确证据的角色及跨章节继承仍未扩展，P3未实施。

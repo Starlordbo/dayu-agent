@@ -12,9 +12,14 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from dayu.contracts.fins import FinsCommandName, FinsResult, UploadMaterialCommandPayload, UploadMaterialResultData
-from dayu.fins.domain.document_reference import DocumentReference
+from dayu.contracts.fins import (
+    FinsCommand, FinsCommandName, FinsResult, ProcessMaterialCommandPayload,
+    ProcessSingleResultData, UploadMaterialCommandPayload, UploadMaterialResultData,
+)
+from dayu.fins.domain.document_models import DocumentQuery
+from dayu.fins.domain.document_reference import DocumentReference, DocumentReferenceView
 from dayu.fins.domain.enums import SourceKind
+from dayu.fins.pipelines.docling_upload_service import build_upload_source_fingerprint
 from dayu.fins.pipelines.json_types import JsonValue
 from dayu.fins.pipelines.sec_pipeline import SecPipeline
 from dayu.fins.service_runtime import DefaultFinsRuntime
@@ -28,6 +33,15 @@ from dayu.web.streamlit.pages.material_tab import (
 )
 
 pytestmark = pytest.mark.integration
+
+_FIXTURE_DIRECTORY = Path(__file__).parents[1] / "fixtures" / "earnings_call"
+_FIXTURE_TITLE = "Q4 2023 Fixture Company Earnings Call"
+_FIXTURE_COMPANY = "Fixture Company"
+_OTHER_COMPANY = "Other Fixture Company"
+_FIXTURE_YEAR = 2023
+_FIXTURE_PERIOD = "Q4"
+_ORIGINAL_REMARK = "Customer demand improved during the quarter."
+_OTHER_REMARK = "Other Fixture Company demand remained stable during the quarter."
 
 
 class _IntegrationHost(StubSessionRegistry, StubHostExecutor):
@@ -78,6 +92,263 @@ class RuntimeSubmissionService(FinsService):
         submission = super().submit(request)
         assert isinstance(submission.execution, FinsResult)
         return submission
+
+
+def _fixture_input(suffix: str) -> MaterialUploadInput:
+    """读取既有四格式样本，不重新生成或修改 fixture。
+
+    Args:
+        suffix: 既有样本的文件扩展名。
+    Returns:
+        保留原始字节、标题和财季的上传输入。
+    Raises:
+        OSError: 样本无法读取。
+    """
+    source = _FIXTURE_DIRECTORY / f"2023Q4_call.{suffix}"
+    entry = MaterialUploadEntry(
+        source.name, _FIXTURE_TITLE, _FIXTURE_YEAR, _FIXTURE_PERIOD, False, "confirmed",
+    )
+    return MaterialUploadInput(entry, source.read_bytes())
+
+
+def _source_files(runtime: DefaultFinsRuntime, ticker: str, document_id: str) -> dict[str, bytes]:
+    """通过公开仓储读取源材料全部文件，用于比较重建和重传前后的持久内容。
+
+    Args:
+        runtime: 当前真实运行时。
+        ticker: 材料所属公司。
+        document_id: 实际入库编号。
+    Returns:
+        文件名到原始字节的映射，包含原件与转换产物。
+    Raises:
+        OSError: 源材料或文件无法读取。
+    """
+    handle = runtime.source_repository.get_source_handle(ticker, document_id, SourceKind.MATERIAL)
+    return {
+        Path(file.uri).name: runtime.blob_repository.read_file_bytes(handle, Path(file.uri).name)
+        for file in runtime.blob_repository.list_files(handle)
+    }
+
+
+def _reject_read_command(
+    command: FinsCommand, *, cancel_checker: Callable[[], bool] | None = None,
+) -> FinsResult:
+    """在只读验证期间阻断命令执行，禁止读取偷偷上传或处理。
+
+    Args:
+        command: 不应发生的运行时命令。
+        cancel_checker: 命令取消检查器。
+    Returns:
+        不返回。
+    Raises:
+        AssertionError: 只读读取触发运行时命令。
+    """
+    raise AssertionError(f"只读原文不应执行命令：{command.name}")
+
+
+def _read_material_views(
+    service: RuntimeSubmissionService, *, ticker: str, document_id: str, company_name: str,
+) -> tuple[DocumentReferenceView, ...]:
+    """通过真实目录和机器引用读取全文，并验证读取没有触发命令或 Agent。
+
+    Args:
+        service: 当前 Runtime 重新装配的类型化服务。
+        ticker: 预期公司代码。
+        document_id: 实际入库编号。
+        company_name: 预期公司名称。
+    Returns:
+        文档级视图和按真实目录顺序读取的章节视图。
+    Raises:
+        AssertionError: 文档头、原文、引用范围或只读边界不符合契约。
+        OSError: 持久材料无法读取。
+    """
+    host = service.host
+    assert isinstance(host, _IntegrationHost)
+    calls_before = service.calls.copy()
+    sessions_before = host.list_sessions()
+    execution_counts = (host.sync_call_count, host.stream_call_count)
+    tools = service.fins_runtime.get_tool_service()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(service.fins_runtime, "execute", _reject_read_command)
+        document = service.resolve_document_reference(DocumentReference(ticker, document_id))
+        assert service.list_materials(ticker) == [document.info]
+        assert (document.info.ticker, document.info.document_id) == (ticker, document_id)
+        assert (document.info.company_name, document.info.material_name) == (company_name, _FIXTURE_TITLE)
+        assert (document.info.fiscal_year, document.info.fiscal_period) == (_FIXTURE_YEAR, _FIXTURE_PERIOD)
+        assert document.info.form_type == "EARNINGS_CALL"
+        assert document.selected_section is None
+        directory = tools.get_document_sections(ticker=ticker, document_id=document_id)
+        document_marker = directory["citation"]["source_marker"]
+        assert isinstance(document_marker, str)
+        parsed_document = parse_source_marker(document_marker)
+        assert parsed_document is not None
+        assert (parsed_document.ticker, parsed_document.document_id, parsed_document.ref) == (ticker, document_id, None)
+        assert directory["citation"]["scope"] == "document"
+        assert [section.ref for section in document.sections] == [section["ref"] for section in directory["sections"]]
+        views = [document]
+        bodies: list[str] = []
+        for section in document.sections:
+            content = tools.read_section(ticker=ticker, document_id=document_id, ref=section.ref)
+            marker = content["citation"]["source_marker"]
+            assert isinstance(marker, str)
+            parsed = parse_source_marker(marker)
+            assert parsed is not None
+            expected_ref = None if content["contains_full_text"] else section.ref
+            assert (parsed.ticker, parsed.document_id, parsed.ref) == (ticker, document_id, expected_ref)
+            marker_view = service.resolve_document_reference(DocumentReference(parsed.ticker, parsed.document_id, parsed.ref))
+            view = service.resolve_document_reference(DocumentReference(ticker, document_id, section.ref))
+            assert marker_view == (document if expected_ref is None else view)
+            selected = view.selected_section
+            assert selected is not None and selected.ref == section.ref
+            assert view.info == document.info and view.sections == document.sections
+            assert selected.content == content["content"]
+            assert "".join(passage.text for passage in selected.passages) == selected.content
+            bodies.append(selected.content)
+            views.append(view)
+        full_text = "\n".join(bodies)
+        for evidence in (
+            "42 million", "100 million", "Alex Smith - Analyst", "Jane Doe - Chief Executive Officer",
+            "We have not provided that revenue forecast",
+        ):
+            assert evidence in full_text
+    assert service.calls == calls_before
+    assert host.list_sessions() == sessions_before
+    assert (host.sync_call_count, host.stream_call_count) == execution_counts
+    assert host.last_execution_contract is None and host.last_prepared_turn is None
+    return tuple(views)
+
+
+@pytest.mark.parametrize("suffix", ["md", "txt", "docx", "pdf"])
+def test_four_formats_new_runtime_preserves_references_and_deduplicates(tmp_path: Path, suffix: str) -> None:
+    """全新 Runtime/Service 仍能定位已处理材料，同指纹重传不产生第二份材料。
+
+    Args:
+        tmp_path: 供重建前后共用的隔离工作区。
+        suffix: 既有真实转换样本格式。
+    Returns:
+        无。
+    Raises:
+        AssertionError: 入库被误当就绪、重建丢失引用或重传改变源材料。
+        OSError: 样本或仓储读写失败。
+    """
+    item = _fixture_input(suffix)
+    source = _FIXTURE_DIRECTORY / item.entry.file_name
+    runtime = DefaultFinsRuntime.create(workspace_root=tmp_path)
+    service = RuntimeSubmissionService(runtime)
+    upload_request = build_upload_request(
+        ticker="AAPL", company_name=_FIXTURE_COMPANY, entry=item.entry, file_path=source,
+        fiscal_year=_FIXTURE_YEAR, fiscal_period=_FIXTURE_PERIOD,
+    )
+    uploaded = service.submit(upload_request).execution
+    assert isinstance(uploaded, FinsResult) and isinstance(uploaded.data, UploadMaterialResultData)
+    assert uploaded.data.status == "ok"
+    document_id = uploaded.data.document_id
+    assert document_id is not None
+    meta_before = runtime.source_repository.get_source_meta("AAPL", document_id, SourceKind.MATERIAL)
+    assert meta_before["ingest_complete"] is True
+    assert meta_before["source_fingerprint"] == build_upload_source_fingerprint([source])
+    files_before = _source_files(runtime, "AAPL", document_id)
+    assert files_before[source.name] == item.data
+    # 目录可见只说明入库；此时还没有处理快照，不能据此声称已经可问答。
+    assert [info.document_id for info in service.list_materials("AAPL")] == [document_id]
+    assert runtime.processed_repository.list_processed_documents("AAPL", DocumentQuery()) == []
+    process_request = FinsSubmitRequest(command=FinsCommand(
+        name=FinsCommandName.PROCESS_MATERIAL,
+        payload=ProcessMaterialCommandPayload(ticker="AAPL", document_id=document_id),
+    ))
+    processed = service.submit(process_request).execution
+    assert isinstance(processed, FinsResult) and isinstance(processed.data, ProcessSingleResultData)
+    assert (processed.data.status, processed.data.document_id) == ("processed", document_id)
+    before = _read_material_views(service, ticker="AAPL", document_id=document_id, company_name=_FIXTURE_COMPANY)
+
+    fresh_runtime = DefaultFinsRuntime.create(workspace_root=tmp_path)
+    fresh_service = RuntimeSubmissionService(fresh_runtime)
+    assert fresh_runtime is not runtime and fresh_service is not service
+    assert _read_material_views(
+        fresh_service, ticker="AAPL", document_id=document_id, company_name=_FIXTURE_COMPANY,
+    ) == before
+    assert fresh_service.calls == []
+    assert fresh_runtime.source_repository.get_source_meta("AAPL", document_id, SourceKind.MATERIAL) == meta_before
+    assert _source_files(fresh_runtime, "AAPL", document_id) == files_before
+
+    duplicate = fresh_service.submit(upload_request).execution
+    assert isinstance(duplicate, FinsResult) and isinstance(duplicate.data, UploadMaterialResultData)
+    assert (duplicate.data.status, duplicate.data.skip_reason, duplicate.data.document_id) == (
+        "skipped", "already_uploaded", document_id,
+    )
+    reprocessed = fresh_service.submit(process_request).execution
+    assert isinstance(reprocessed, FinsResult) and isinstance(reprocessed.data, ProcessSingleResultData)
+    assert (reprocessed.data.status, reprocessed.data.reason, reprocessed.data.document_id) == (
+        "skipped", "version_matched", document_id,
+    )
+    assert fresh_runtime.source_repository.list_source_document_ids("AAPL", SourceKind.MATERIAL) == [document_id]
+    assert [document.document_id for document in fresh_runtime.processed_repository.list_processed_documents(
+        "AAPL", DocumentQuery(),
+    )] == [document_id]
+    assert fresh_runtime.source_repository.get_source_meta("AAPL", document_id, SourceKind.MATERIAL) == meta_before
+    assert _source_files(fresh_runtime, "AAPL", document_id) == files_before
+    assert _read_material_views(
+        fresh_service, ticker="AAPL", document_id=document_id, company_name=_FIXTURE_COMPANY,
+    ) == before
+    assert fresh_service.calls == [FinsCommandName.UPLOAD_MATERIAL, FinsCommandName.PROCESS_MATERIAL]
+
+
+@pytest.mark.parametrize("suffix", ["md", "txt", "docx", "pdf"])
+def test_four_formats_new_runtime_isolates_same_document_id_by_company(tmp_path: Path, suffix: str) -> None:
+    """同名同财季材料跨公司得到相同 ID，重建后的引用仍严格按公司读取。
+
+    Args:
+        tmp_path: 两家公司共用的隔离工作区。
+        suffix: 既有样本格式；仅文本格式派生不同正文，二进制保持原样。
+    Returns:
+        无。
+    Raises:
+        AssertionError: 同 ID 材料的原件、公司头、正文或来源 ticker 串扰。
+        OSError: 样本或仓储读写失败。
+    """
+    item = _fixture_input(suffix)
+    other_item = item
+    if suffix in {"md", "txt"}:
+        # 只改临时上传输入的一句正文；保持 42/100 million 对照及原始 fixture 不变。
+        assert _ORIGINAL_REMARK.encode("utf-8") in item.data
+        other_item = replace(item, data=item.data.replace(
+            _ORIGINAL_REMARK.encode("utf-8"), _OTHER_REMARK.encode("utf-8"),
+        ))
+    runtime = DefaultFinsRuntime.create(workspace_root=tmp_path)
+    service = RuntimeSubmissionService(runtime)
+    first = execute_material_input(
+        ticker="AAPL", company_name=_FIXTURE_COMPANY, item=item, workspace_root=tmp_path, fins_service=service,
+    )
+    assert first.status == STATUS_READY, first.message
+    assert first.document_id is not None
+    before = _read_material_views(service, ticker="AAPL", document_id=first.document_id, company_name=_FIXTURE_COMPANY)
+    second = execute_material_input(
+        ticker="MSFT", company_name=_OTHER_COMPANY, item=other_item, workspace_root=tmp_path, fins_service=service,
+    )
+    assert second.status == STATUS_READY, second.message
+    assert second.document_id == first.document_id
+
+    fresh_runtime = DefaultFinsRuntime.create(workspace_root=tmp_path)
+    fresh_service = RuntimeSubmissionService(fresh_runtime)
+    # 交替读取相同 ID，使用公开返回值证明隔离，不窥探或清空内部缓存。
+    for ticker, company_name, expected_item in (
+        ("AAPL", _FIXTURE_COMPANY, item), ("MSFT", _OTHER_COMPANY, other_item),
+        ("AAPL", _FIXTURE_COMPANY, item), ("MSFT", _OTHER_COMPANY, other_item),
+    ):
+        views = _read_material_views(
+            fresh_service, ticker=ticker, document_id=first.document_id, company_name=company_name,
+        )
+        assert fresh_runtime.source_repository.list_source_document_ids(ticker, SourceKind.MATERIAL) == [first.document_id]
+        assert _source_files(fresh_runtime, ticker, first.document_id)[item.entry.file_name] == expected_item.data
+        if ticker == "AAPL":
+            assert views == before
+        if suffix in {"md", "txt"}:
+            full_text = "\n".join(view.selected_section.content for view in views if view.selected_section is not None)
+            expected_remark, excluded_remark = (
+                (_ORIGINAL_REMARK, _OTHER_REMARK) if ticker == "AAPL" else (_OTHER_REMARK, _ORIGINAL_REMARK)
+            )
+            assert expected_remark in full_text and excluded_remark not in full_text
+    assert fresh_service.calls == []
 
 
 def fail_snapshot_export(

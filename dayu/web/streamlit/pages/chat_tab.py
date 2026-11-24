@@ -19,6 +19,7 @@ from dayu.host.protocols import (
 from dayu.log import Log
 from dayu.services.protocols import ChatServiceProtocol
 from dayu.web.streamlit.components.watchlist import WatchlistItem
+from dayu.web.streamlit.navigation import TICKER_QUERY_KEY, VIEW_QUERY_KEY, StockView
 from dayu.web.streamlit.pages.chat.citations import render_citation_links
 from dayu.web.streamlit.pages.chat.stream_runtime import (
     ChatStreamFrameState,
@@ -142,7 +143,7 @@ def _ensure_messages(state_key: str) -> list[ChatMessage]:
     return []
 
 
-def _render_message_history(messages: list[ChatMessage]) -> None:
+def _render_message_history(messages: list[ChatMessage], *, ticker: str) -> None:
     """渲染历史消息。
 
     按对话轮次依次渲染用户消息与助手回复；助手消息中若含
@@ -150,6 +151,7 @@ def _render_message_history(messages: list[ChatMessage]) -> None:
 
     参数:
         messages: 待渲染的聊天消息列表。
+        ticker: 原始对话公司，与回答中引用的来源公司独立。
 
     返回值:
         无。
@@ -171,17 +173,21 @@ def _render_message_history(messages: list[ChatMessage]) -> None:
                     with st.expander(_THINKING_EXPANDER_TITLE, expanded=True):
                         st.markdown(message.reasoning_content)
                 if message.role == "assistant":
-                    st.markdown(render_citation_links(message.content, st.query_params.to_dict()))
+                    st.markdown(render_citation_links(
+                        message.content,
+                        st.query_params.to_dict() | {TICKER_QUERY_KEY: ticker, VIEW_QUERY_KEY: StockView.ANALYSIS},
+                    ))
                 else:
                     st.markdown(message.content)
 
 
-def _render_stream_frame(*, title: str, state: ChatStreamFrameState) -> None:
+def _render_stream_frame(*, title: str, state: ChatStreamFrameState, ticker: str) -> None:
     """渲染当前流式帧的思考与正文。
 
     参数:
         title: 思考内容折叠面板标题。
         state: 流式渲染帧状态。
+        ticker: 原始对话公司；流式来源链接不能覆盖返回身份。
 
     返回值:
         无。
@@ -196,7 +202,10 @@ def _render_stream_frame(*, title: str, state: ChatStreamFrameState) -> None:
         elif not state.done:
             st.markdown("正在思考...")
     st.markdown(
-        render_citation_links(normalize_stream_text_for_markdown(state.answer_text), st.query_params.to_dict())
+        render_citation_links(
+            normalize_stream_text_for_markdown(state.answer_text),
+            st.query_params.to_dict() | {TICKER_QUERY_KEY: ticker, VIEW_QUERY_KEY: StockView.ANALYSIS},
+        )
     )
 
 
@@ -373,7 +382,7 @@ def _render_stream_polling_fragment(
     assistant_column, _ = st.columns(_ASSISTANT_MESSAGE_COLUMN_SPEC, gap="small")
     with assistant_column:
         with st.chat_message("assistant"):
-            _render_stream_frame(title=_THINKING_EXPANDER_TITLE, state=stream_state)
+            _render_stream_frame(title=_THINKING_EXPANDER_TITLE, state=stream_state, ticker=ticker)
 
     if not stream_state.done:
         return
@@ -442,7 +451,17 @@ def render_chat_tab(
     chat_service: ChatServiceProtocol | None = None,
     model_names: tuple[str, ...] = (),
 ) -> None:
-    """渲染交互式分析 Tab。"""
+    """渲染交互式分析 Tab，并从公司专属 URL 参数恢复原会话。
+
+    参数:
+        selected_stock: 原始对话公司，不限制回答引用其他公司。
+        chat_service: 聊天服务；不可用时显示提示。
+        model_names: 可选模型名称；为空不影响既有会话的读取。
+    返回值:
+        无。
+    异常:
+        无；预期服务错误在页面显示。
+    """
 
     ticker = selected_stock.ticker
     message_state_key = _build_state_key(ticker, "messages")
@@ -452,11 +471,11 @@ def render_chat_tab(
 
     stream_state = read_stream_frame_state(stream_state_key)
 
-    session_id = build_chat_session_id(ticker)
+    session_query_key = _build_state_key(ticker, "session")
+    # 原会话的恢复不依赖可选模型目录；目录为空也不能悄悄切回公司默认会话。
+    session_id = str(st.query_params.get(session_query_key, build_chat_session_id(ticker)))
     model_name: str | None = None
     if model_names:
-        session_query_key = _build_state_key(ticker, "session")
-        session_id = str(st.query_params.get(session_query_key, session_id))
         selected = st.selectbox("对话模型（切换请新建会话）", ("", *model_names), key=_build_state_key(ticker, "model"), format_func=_format_model_choice)
         model_name = selected or None
         if st.button("新建会话", key=_build_state_key(ticker, "new_session"), disabled=bool(stream_state and not stream_state.done)):
@@ -511,7 +530,7 @@ def render_chat_tab(
         if not messages:
             st.markdown(_WELCOME_MARKDOWN)
         else:
-            _render_message_history(messages)
+            _render_message_history(messages, ticker=ticker)
         if stream_state is not None:
             _render_stream_polling_fragment(
                 ticker=ticker,

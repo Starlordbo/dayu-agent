@@ -36,7 +36,7 @@
 
 - Streamlit/FastAPI 都必须通过 `ServiceProtocol` 访问业务能力，不绕过 Service 直连 Host 内部对象。
 - 聊天历史读取与清空走 `ChatServiceProtocol` 的公开方法，不在 UI 侧直接读写 archive。
-- 聊天会话 ID 语义固定为公司级稳定键（`streamlit-web-{COMPANY_ID}`），避免同公司不同 ticker 写法割裂历史。
+- 无显式会话参数时使用公司级默认键（`streamlit-web-{COMPANY_ID}`）；URL 中的 `chat_tab_<ticker>_session` 优先恢复原会话，即使当前可选模型目录为空也不退回公司默认会话。
 - 自选股持久化边界由 `tests/application/test_streamlit_watchlist.py` 守护。
 
 ### 会议纪要上传
@@ -57,6 +57,8 @@
 - `pages/chat/citations.py` 只处理完整合法标记，不处理代码块、行内代码、reasoning 或用户文本；历史及流式累计正文共用转换。无定位的旧回答保留普通文本，不做模糊反查。
 - 链接使用 `source_ticker`、`source_document`、可选 `source_ref` 查询参数，保留非 `source_` 参数（包括聊天 session）。
   `streamlit_app.py` 在侧栏之前路由至 `pages/source_viewer.py`，始终使用链接中的公司身份，刷新可恢复。
+- 返回上下文与来源身份分离：聊天/材料目录链接显式写入原公司 `ticker` 和 `view=analysis` / `view=materials`，不会从来源公司的 `source_ticker` 猜测原公司。查看器“返回来源页面”只移除 `source_*`，保留原公司、功能页、公司专属会话及其他参数。
+- 侧栏每次从持久自选股核对 `ticker`；合法 URL 优先于旧页面选择，失效或已删除目标不自动退回旧公司/来源公司，用户可重新选股。主页面按 `view` 设置默认 Tab，未知值回到财报管理；这里不是手动切 Tab 后实时同步 URL 的机制。
 - 查看器通过只读 Service 展示公司、财季、真实材料标题、目录及完整章节正文；无细粒度定位显示文档级，全文伪章节显示“文档级 / 全文”。
 - 纪要显示发言片段的字符范围、明确身份依据及问句/陈述形式；分析师提问与管理层陈述不会共用整章身份标签，未知显示“未标注”。
 - 这是已入库转换正文的章节查看器，不是原始 PDF 版面/页内高亮或原件下载接口。只读访问不提交聊天、上传或处理命令。

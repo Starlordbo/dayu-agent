@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+import re
+from unittest.mock import Mock
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -20,8 +22,9 @@ from dayu.fins.domain.document_reference import (
 from dayu.services.fins_service import FinsService
 from dayu.services.protocols import ChatServiceProtocol, FinsServiceProtocol, WriteServiceProtocol
 from dayu.services.startup_preparation import PreparedHostRuntimeDependencies, prepare_host_runtime_dependencies
-from dayu.web.streamlit.components.watchlist import WatchlistItem
+from dayu.web.streamlit.components.watchlist import WatchlistItem, save_watchlist_items
 from tests.application.test_material_tab import RecordingService
+from tests.application.test_streamlit_chat_render import _ChatService, _turn
 
 _APP = """
 from dayu.web.streamlit_app import main
@@ -187,6 +190,63 @@ def _build_app(
     for key, value in query.items():
         app.query_params[key] = value
     return app
+
+
+@pytest.mark.parametrize("section_ref", [None, "sec_call"])
+def test_cross_company_source_returns_to_fresh_main_and_original_chat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    prepared_deps: PreparedHostRuntimeDependencies, section_ref: str | None,
+) -> None:
+    """真实入口串联跨公司引用、查看器与全新会话返回，不依赖旧选股缓存。
+
+    参数:
+        tmp_path: 持久自选股和服务装配目录。
+        monkeypatch: 只隔离无关 Tab 与模型目录，保留真实入口、侧栏、主页面、聊天和查看器。
+        prepared_deps: 本地完整运行依赖，不调用模型。
+        section_ref: 文档或章节级引用。
+    返回值:
+        无。
+    异常:
+        AssertionError: 引用公司、默认页或原会话串扰，或产生写入/模型提交时抛出。
+    """
+    save_watchlist_items(tmp_path, [WatchlistItem("MSFT", "Microsoft", "", ""), WatchlistItem("AAPL", "Apple", "", "")])
+    monkeypatch.setenv("DAYU_WORKSPACE", str(tmp_path))
+    for name in ("render_filing_tab", "render_report_tab", "render_material_tab"):
+        monkeypatch.setattr("dayu.web.streamlit.pages.main_page." + name, Mock())
+    catalog = prepared_deps.scene_execution_acceptance_preparer.model_catalog
+    monkeypatch.setattr(type(catalog), "load_models", Mock(return_value={}))
+    marker = "[[source:AAPL|mat_call" + ("|" + section_ref if section_ref else "") + "]]"
+    chat = _ChatService(histories={"original": [_turn(user="对照两家公司", answer="跨公司证据 " + marker)]})
+    service = _SourceService()
+    origin_query = {"ticker": "MSFT", "view": "analysis", "chat_tab_MSFT_session": "original", "other": "a & b"}
+    origin = _build_app(prepared_deps, service, origin_query)
+    origin.session_state["chat_service"] = chat
+    origin.session_state["selected_ticker"] = "AAPL"
+    origin.run()
+    assert not origin.exception and not origin.error
+    assert origin.session_state["selected_ticker"] == "MSFT"
+    rendered = next(item.value for item in origin.markdown if "跨公司证据" in item.value)
+    match = re.search(r"\[(?:章节|文档)来源\]\(([^)]+)\)", rendered)
+    assert match is not None
+    source_query = {key: values[-1] for key, values in parse_qs(urlsplit(match.group(1)).query).items()}
+    assert source_query["ticker"] == "MSFT" and source_query["source_ticker"] == "AAPL"
+    viewer = _build_app(prepared_deps, service, source_query).run()
+    assert not viewer.exception and not viewer.error
+    assert service.reads == [DocumentReference("AAPL", "mat_call", section_ref)]
+    back_url = viewer.get("link_button")[0].proto.url
+    back_query = {key: values[-1] for key, values in parse_qs(urlsplit(back_url).query).items()}
+    assert back_query == origin_query
+    restored = _build_app(prepared_deps, service, back_query)
+    del restored.session_state["selected_ticker"]
+    restored.session_state["chat_service"] = chat
+    restored.run()
+    assert not restored.exception and not restored.error
+    assert restored.session_state["selected_ticker"] == "MSFT"
+    assert restored.get("tab_container")[0].proto.tab_container.default_tab_index == 1
+    assert chat.reads == [("original", 50), ("original", 50)]
+    assert any("跨公司证据" in item.value for item in restored.markdown)
+    assert chat.submissions == [] and service.calls == []
+    assert restored.query_params["chat_tab_MSFT_session"] == ["original"]
 
 
 @pytest.mark.parametrize("section_ref", [None, "sec_call"])
