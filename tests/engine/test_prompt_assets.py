@@ -110,6 +110,7 @@ _EXPECTED_THINKING_ALLOWED_NAMES: list[str] = [
 
 _EXPECTED_INTERACTIVE_ALLOWED_NAMES: list[str] = [
     "gpt-6-astra",
+    "gpt-6-sol",
     "openai-responses",
     "deepseek-v4-flash-thinking",
     "deepseek-v4-pro-thinking",

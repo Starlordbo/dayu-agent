@@ -4,6 +4,7 @@
     "default_name": "deepseek-v4-flash-thinking",
     "allowed_names": [
       "gpt-6-astra",
+      "gpt-6-sol",
       "openai-responses",
       "deepseek-v4-flash-thinking",
       "deepseek-v4-pro-thinking",
