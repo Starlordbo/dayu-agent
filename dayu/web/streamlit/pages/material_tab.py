@@ -26,8 +26,8 @@ from dayu.contracts.fins import (
 from dayu.fins.domain.tool_models import Citation
 from dayu.fins.pipelines.earnings_call_batch import EARNINGS_CALL_FORM_TYPE
 from dayu.web.streamlit.pages.chat.citations import render_citation_links
-from dayu.fins.upload_recognition import infer_earnings_call_fiscal
 from dayu.services.contracts import FinsSubmitRequest
+from dayu.services.material_prefill import prefill_material_metadata
 from dayu.services.protocols import FinsServiceProtocol
 from dayu.web.streamlit.components.watchlist import WatchlistItem
 from dayu.web.streamlit.navigation import TICKER_QUERY_KEY, VIEW_QUERY_KEY, StockView
@@ -52,6 +52,11 @@ _SKIPPED = "skipped"
 _ALREADY_UPLOADED = "already_uploaded"
 _PROCESSED = "processed"
 _VERSION_MATCHED = "version_matched"
+_PREFILL_SOURCE_LABELS = {
+    "opening": "按正文推断（开场声明）",
+    "title": "按正文推断（标题）",
+    "filename": "按文件名推断",
+}
 
 
 @dataclass(frozen=True)
@@ -64,6 +69,15 @@ class MaterialUploadEntry:
     fiscal_period: str | None
     needs_confirmation: bool
     reason: str
+    inference_source: str | None = None
+
+
+@dataclass(frozen=True)
+class MaterialUploadFile:
+    """浏览器已选文件的名称与原始字节，尚未预填或确认材料身份。"""
+
+    name: str
+    data: bytes
 
 
 @dataclass(frozen=True)
@@ -85,27 +99,29 @@ class MaterialUploadInput:
     data: bytes
 
 
-def build_material_entries(file_names: list[str]) -> list[MaterialUploadEntry]:
-    """从文件名建立初始条目，未确认信息由页面允许补全。
+def build_material_entries(files: list[MaterialUploadFile]) -> list[MaterialUploadEntry]:
+    """通过 Service 从已选文件预填条目，保留用户补全和覆盖能力。
 
     Args:
-        file_names: 原始文件名。
+        files: 已选文件名与原始字节。
     Returns:
         与输入一一对应的初始条目。
     Raises:
         无。
     """
     entries: list[MaterialUploadEntry] = []
-    for file_name in file_names:
-        guess = infer_earnings_call_fiscal(filename=file_name)
+    for file in files:
+        prefill = prefill_material_metadata(filename=file.name, data=file.data)
+        guess = prefill.fiscal
         entries.append(
             MaterialUploadEntry(
-                file_name=file_name,
-                material_name=Path(file_name).stem.strip() or file_name,
+                file_name=file.name,
+                material_name=prefill.material_name,
                 fiscal_year=guess.fiscal_year,
                 fiscal_period=guess.fiscal_period,
                 needs_confirmation=guess.needs_confirmation,
                 reason=guess.reason,
+                inference_source=guess.source,
             )
         )
     return entries
@@ -337,7 +353,7 @@ def _edit_entry(entry: MaterialUploadEntry, widget_key: str) -> MaterialUploadEn
     """为单文件提供标题、财季及确认控件。
 
     Args:
-        entry: 文件名推断的条目。
+        entry: 按正文或文件名预填的条目。
         widget_key: 公司及内容隔离的控件键。
     Returns:
         用户编辑后的条目。
@@ -345,6 +361,12 @@ def _edit_entry(entry: MaterialUploadEntry, widget_key: str) -> MaterialUploadEn
         无。
     """
     with st.expander(entry.file_name):
+        if entry.inference_source is None:
+            st.caption("财季未知，需要确认；请补全财年、财季并核对标题。")
+        else:
+            source_label = _PREFILL_SOURCE_LABELS[entry.inference_source]
+            confirmation = "；来源冲突或信息不完整，需要确认" if entry.needs_confirmation else "；请核对，可编辑覆盖"
+            st.caption(f"{source_label}{confirmation}")
         title = st.text_input(
             "材料标题（冲突时修改后另存，原件不会覆盖）", value=entry.material_name, key=f"title_{widget_key}"
         )
@@ -429,6 +451,7 @@ def render_material_tab(
     """
     st.markdown("#### 电话会议纪要上传")
     st.caption("支持 Markdown / TXT / DOCX / 文字型 PDF；一个文件一份材料；转换完成后继续预处理。")
+    st.caption("选中文件时轻量读取 Markdown / TXT / DOCX 的标题与开场；PDF 不提取正文，仅按文件名预填，请人工核对。")
     uploaded_files = st.file_uploader(
         "选择纪要文件（可多选）",
         accept_multiple_files=True,
@@ -440,8 +463,9 @@ def render_material_tab(
         return
     inputs: list[MaterialUploadInput] = []
     seen_keys: set[str] = set()
-    for uploaded, entry in zip(uploaded_files, build_material_entries([item.name for item in uploaded_files])):
-        item = MaterialUploadInput(entry, uploaded.getvalue())
+    files = [MaterialUploadFile(uploaded.name, uploaded.getvalue()) for uploaded in uploaded_files]
+    for file, entry in zip(files, build_material_entries(files)):
+        item = MaterialUploadInput(entry, file.data)
         widget_key = material_input_key(ticker=selected_stock.ticker, item=item)
         if widget_key in seen_keys:
             st.caption(f"已忽略重复选择：{entry.file_name}")

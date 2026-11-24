@@ -469,6 +469,8 @@ python utils/retriage_active_6k_filings.py --base workspace --tickers ALC,ASM,NV
 - 无声明、来源冲突或年份缺失时返回 `needs_confirmation=True`，由上传界面要求用户确认，下层不猜测。
 - fingerprint、去重、冲突保留与覆盖策略属于上传编排层，不在本函数内。
 
+选文件阶段的轻量提取由 `material_metadata_extraction.extract_material_metadata(filename=..., data=...)` 提供 `(title, opening)`，与财季判断、仓储和 Docling 转换分离。MD/TXT 按 UTF-8 或 BOM 指定的 UTF-16/UTF-32 严格解码，以首个非空行作为标题（去除 Markdown 标题标记），开场仅取标题之后最多两段；DOCX 直接读取 `word/document.xml` 的前三个非空段落，分别作为标题和两段开场，XML 解压大小上限为 2 MiB。PDF、空内容、不可解码或损坏/超限文档返回空元数据。Service 将提取结果交给既有财季规则，提取失败时退回文件名；此能力不提供 PDF 正文识别或 OCR，也不代替确认后的转换与处理。
+
 上编排层由两个模块组成：`dayu/fins/pipelines/earnings_call_batch.py` 只做纯决策
 （create / reuse / resume_processing / conflict_new_material，单项失败隔离，拒绝破坏性覆盖）；
 `dayu/fins/pipelines/earnings_call_upload_adapter.py` 把决策映射到既有 `DoclingUploadService.execute_upload`，

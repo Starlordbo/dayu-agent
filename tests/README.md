@@ -559,6 +559,8 @@ DAYU_RUN_LIVE_API=1 EDGAR_LOCAL_DATA_DIR="$PWD/workspace/tmp/edgar" \
 ## 纪要上传与原文引用测试
 
 - `tests/fins/test_earnings_call_*.py`：财季识别、单文件决策、默认质量门、禁止破坏性覆盖、严格身份行解析。覆盖身份与问句形式独立、未知身份、原文连续范围。
+- `tests/fins/test_material_metadata_extraction.py`：用内存字节验证 MD/TXT/BOM 解码、DOCX 段落提取、标题与开场隔离、空内容/乱码/损坏文件退回及 PDF 不提取。提取器不启动 Docling，不访问仓储。
+- `tests/application/test_material_tab.py` 与 `test_material_tab_render.py`：验证预填路径的开场 > 标题 > 文件名优先级、冲突需确认、PDF 文件名回退、unknown 提示，以及编辑后的字段与原字节传入既有上传命令；检查点键继续按预填/编辑后的身份和内容隔离，重绘与重试不重复上传。
 - `tests/application/test_material_upload_integration.py`：真实 Runtime/Docling/仓储/预处理四格式链路；在快照导出点注入处理失败，检查重试只处理且原文件/元数据不变。四格式回归还分别验证同 workspace 全新 Runtime/Service 的只读定位、同指纹重传后的 ID/原件/源 meta 不变且无第二份材料，以及跨公司同名同财季同 ID 的 marker ticker、公司头与原件隔离。MD/TXT 使用临时派生正文验证内容隔离，DOCX/PDF 复用相同字节验证身份隔离。目录可见只表示入库，须另行验证处理快照与 `processed` 或 `skipped/version_matched`。读取期间阻断 Runtime 命令并断言无宿主执行或 Agent 调用；宿主外壳为测试替身，不等同完整 Host/Agent 会话或浏览器 E2E。
 - `tests/application/test_document_reference_service.py`：真实入库、重新装配后的目录、跨公司同编号隔离、删除/不完整状态、文档/章节范围、只读且零命令。必须保护 Docling 正文段落边界，禁止以宽松身份推断掩盖源文本损失。
 - `tests/application/test_streamlit_citations.py`：历史/流式/终态统一格式化，完整合法机器定位、分块输出、URL注入与代码块隔离。

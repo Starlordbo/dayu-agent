@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 from urllib.parse import parse_qs, urlsplit
@@ -11,7 +12,7 @@ from streamlit.proto.Common_pb2 import FileURLs
 from streamlit.runtime.uploaded_file_manager import UploadedFile, UploadedFileRec
 from streamlit.testing.v1 import AppTest
 
-from dayu.contracts.fins import FinsCommandName
+from dayu.contracts.fins import FinsCommandName, UploadMaterialCommandPayload
 from dayu.fins.service_runtime import DefaultFinsRuntime
 from dayu.web.streamlit.pages.material_tab import (
     STATUS_READY, MaterialUploadEntry, MaterialUploadInput, execute_material_input,
@@ -26,6 +27,88 @@ from dayu.web.streamlit.pages.material_tab import render_material_tab
 from dayu.web.streamlit.components.watchlist import WatchlistItem
 render_material_tab(WatchlistItem("AAPL", "Apple", "", ""), Path(st.session_state["root"]), st.session_state["service"])
 '''
+
+
+@dataclass
+class MetadataUploader:
+    """向真实页面注入单个具有指定名称与正文的浏览器文件。"""
+
+    name: str
+    data: bytes
+
+    def __call__(
+        self, label: str, *, accept_multiple_files: bool, type: list[str], key: str,
+    ) -> list[UploadedFile]:
+        """参数：上传控件标签、选项及键。返回：指定文件列表。异常：无。"""
+        return [UploadedFile(UploadedFileRec("metadata", self.name, "application/octet-stream", self.data), FileURLs())]
+
+
+@pytest.mark.parametrize("name,data,title,period,hint,confirmation", [
+    ("2023Q4_call.md", b"# Q3 2023 Earnings Call\n\nWelcome everyone.",
+     "Q3 2023 Earnings Call", "Q3", "按正文推断（标题）", True),
+    ("2023Q4_call.txt", b"Q3 2023 Earnings Call\n\nWelcome to Q2 2023 results.",
+     "Q3 2023 Earnings Call", "Q2", "按正文推断（开场声明）", True),
+    ("2023Q4_call.pdf", b"%PDF-1.7\nQ3 2023 Earnings Call",
+     "2023Q4_call", "Q4", "按文件名推断", False),
+    ("unknown.pdf", b"%PDF-1.7\nQ3 2023 Earnings Call",
+     "unknown", "", "财季未知，需要确认", True),
+    ("unknown.md", b"# Business Update\n\nWelcome everyone.",
+     "Business Update", "", "财季未知，需要确认", True),
+])
+def test_page_prefill_hints_and_user_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, data: bytes,
+    title: str, period: str, hint: str, confirmation: bool,
+) -> None:
+    """验证选文件时预填、来源提示、确认与可编辑覆盖走真实页面和上传契约。
+
+    参数:
+        tmp_path: 上传暂存目录。
+        monkeypatch: 注入浏览器文件控件。
+        name: 原始文件名。
+        data: 原始字节。
+        title: 预期标题。
+        period: 预期财季，空串表示未知。
+        hint: 预期推断来源提示。
+        confirmation: 是否必须人工确认。
+    返回值:
+        无。
+    异常:
+        AssertionError: 预填、确认或用户覆盖未传入命令时抛出。
+    """
+    monkeypatch.setattr("dayu.web.streamlit.pages.material_tab.st.file_uploader", MetadataUploader(name, data))
+    service = RecordingService()
+    app = AppTest.from_string(_APP)
+    app.session_state["root"] = str(tmp_path)
+    app.session_state["service"] = service
+    app.run()
+    assert not app.exception
+    assert not service.calls
+    assert app.text_input[0].value == title
+    assert app.selectbox[0].value == period
+    assert len(app.checkbox) == int(confirmation)
+    captions = [caption.value for caption in app.caption]
+    assert any(hint in caption for caption in captions)
+    assert any("PDF 不提取正文" in caption for caption in captions)
+    if name.endswith(".pdf") or not period:
+        assert not any("按正文推断" in caption for caption in captions)
+    if confirmation:
+        app.button[0].click().run()
+        assert not service.calls
+    app.text_input[0].set_value("用户核对标题")
+    app.text_input[1].set_value("2024")
+    app.selectbox[0].set_value("Q1")
+    if confirmation:
+        app.checkbox[0].check()
+    app.button[0].click().run()
+    assert not app.exception
+    assert service.calls == [FinsCommandName.UPLOAD_MATERIAL, FinsCommandName.PROCESS_MATERIAL]
+    payload = service.requests[0].command.payload
+    assert isinstance(payload, UploadMaterialCommandPayload)
+    assert (payload.material_name, payload.fiscal_year, payload.fiscal_period) == ("用户核对标题", 2024, "Q1")
+    assert payload.files is not None and payload.files[0].read_bytes() == data
+    app.run()
+    app.button[0].click().run()
+    assert not app.exception and len(service.calls) == 2
 
 
 def fixture_uploader(label: str, *, accept_multiple_files: bool, type: list[str], key: str) -> list[UploadedFile]:

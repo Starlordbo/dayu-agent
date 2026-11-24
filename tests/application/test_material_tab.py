@@ -16,7 +16,7 @@ from dayu.fins.domain.document_reference import DocumentReference, DocumentRefer
 from dayu.services.contracts import FinsSubmission, FinsSubmitRequest
 from dayu.web.streamlit.pages.material_tab import (
     STATUS_FAILED, STATUS_PENDING_CONFIRMATION, STATUS_PROCESSING, STATUS_READY,
-    MaterialUploadEntry, MaterialUploadInput, MaterialUploadRow,
+    MaterialUploadEntry, MaterialUploadFile, MaterialUploadInput, MaterialUploadRow,
     apply_result, build_material_entries, build_upload_request,
     execute_material_input, material_input_key,
 )
@@ -31,6 +31,7 @@ class RecordingService:
     process_status: str = "processed"
     process_reason: str | None = None
     calls: list[FinsCommandName] = field(default_factory=list)
+    requests: list[FinsSubmitRequest] = field(default_factory=list)
     materials: list[DocumentSourceInfo] = field(default_factory=list)
 
     def submit(self, request: FinsSubmitRequest) -> FinsSubmission:
@@ -44,6 +45,7 @@ class RecordingService:
             RuntimeError: 注入的处理错误。
         """
         self.calls.append(request.command.name)
+        self.requests.append(request)
         if request.command.name == FinsCommandName.UPLOAD_MATERIAL:
             data = UploadMaterialResultData(pipeline="sec", status=self.upload_status,
                                            ticker="AAPL", material_action="create", document_id="mat_test")
@@ -108,10 +110,72 @@ def make_input(data: bytes = b"Q4 2023 Earnings Call") -> MaterialUploadInput:
 
 def test_w1_independent_entries() -> None:
     """参数：无。返回：无。异常：断言失败；逐文件推断不合并。"""
-    entries = build_material_entries(["2023Q4_call.md", "2024Q1_call.txt", "notes.md"])
+    entries = build_material_entries([
+        MaterialUploadFile(name, b"") for name in ("2023Q4_call.md", "2024Q1_call.txt", "notes.md")
+    ])
     assert len(entries) == 3
     assert (entries[0].fiscal_year, entries[0].fiscal_period) == (2023, "Q4")
     assert entries[2].needs_confirmation
+
+
+@pytest.mark.parametrize("suffix", ["md", "txt"])
+def test_body_title_prefills_before_conflicting_filename(suffix: str) -> None:
+    """参数：文本格式后缀。返回：无。异常：断言失败；标题优先且冲突需确认。"""
+    entry = build_material_entries([
+        MaterialUploadFile(f"2023Q4_call.{suffix}", b"# Q3 2023 Earnings Call\n\nWelcome everyone.")
+    ])[0]
+    assert entry.material_name == "Q3 2023 Earnings Call"
+    assert (entry.fiscal_year, entry.fiscal_period) == (2023, "Q3")
+    assert entry.inference_source == "title"
+    assert entry.reason == "source_conflict" and entry.needs_confirmation
+
+
+def test_opening_prefills_before_conflicting_title_and_filename() -> None:
+    """参数：无。返回：无。异常：断言失败；开场独立于标题并拥有最高优先级。"""
+    entry = build_material_entries([
+        MaterialUploadFile("2023Q4_call.md", b"# Q3 2023 Earnings Call\n\nWelcome to Q2 2023 results.")
+    ])[0]
+    assert entry.material_name == "Q3 2023 Earnings Call"
+    assert (entry.fiscal_year, entry.fiscal_period) == (2023, "Q2")
+    assert entry.inference_source == "opening"
+    assert entry.reason == "source_conflict" and entry.needs_confirmation
+
+
+@pytest.mark.parametrize("name,data", [
+    ("2023Q4_call.md", b""),
+    ("2023Q4_call.txt", b"\xff\xfe\xfa"),
+    ("2023Q4_call.docx", b"broken zip"),
+    ("2023Q4_call.pdf", b"%PDF-1.7\nQ3 2023 Earnings Call"),
+])
+def test_unreadable_or_pdf_metadata_uses_filename(name: str, data: bytes) -> None:
+    """参数：文件名及不可提取正文。返回：无。异常：断言失败；保持文件名退回语义。"""
+    entry = build_material_entries([MaterialUploadFile(name, data)])[0]
+    assert entry.material_name == "2023Q4_call"
+    assert (entry.fiscal_year, entry.fiscal_period) == (2023, "Q4")
+    assert entry.inference_source == "filename"
+    assert entry.reason == "declaration" and not entry.needs_confirmation
+
+
+def test_body_without_declaration_stays_unknown() -> None:
+    """参数：无。返回：无。异常：断言失败；可读正文不等于识别出财季。"""
+    entry = build_material_entries([
+        MaterialUploadFile("notes.md", b"# Business Update\n\nWelcome everyone.")
+    ])[0]
+    assert entry.material_name == "Business Update"
+    assert entry.fiscal_year is None and entry.fiscal_period is None
+    assert entry.inference_source is None
+    assert entry.reason == "no_declaration" and entry.needs_confirmation
+
+
+def test_prefill_identity_tracks_title_and_period() -> None:
+    """参数：无。返回：无。异常：断言失败；预填改变身份，编辑后键按新身份生成。"""
+    file = MaterialUploadFile("2023Q4_call.md", b"# Q3 2023 Earnings Call")
+    entry = build_material_entries([file])[0]
+    item = MaterialUploadInput(entry, file.data)
+    filename_entry = replace(entry, material_name="2023Q4_call", fiscal_period="Q4")
+    assert material_input_key(ticker="AAPL", item=item) != material_input_key(
+        ticker="AAPL", item=MaterialUploadInput(filename_entry, file.data)
+    )
 
 
 def test_w3_identity_includes_content_company_and_user_edits() -> None:
