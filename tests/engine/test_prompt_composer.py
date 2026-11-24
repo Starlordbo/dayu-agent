@@ -174,7 +174,7 @@ def test_manifest_tool_selection_is_loaded_from_shared_parser() -> None:
 
     manifest = load_scene_definition(FilePromptAssetStore(ConfigFileResolver()), "audit")
 
-    assert manifest.model.default_name == "mimo-v2.5-pro-thinking-plan"
+    assert manifest.model.default_name == "deepseek-v4-pro-thinking"
     assert manifest.model.allowed_names == _EXPECTED_THINKING_ALLOWED_NAMES
     assert manifest.model.temperature_profile == "audit"
     assert manifest.runtime.agent.max_iterations == 16
@@ -189,7 +189,7 @@ def test_conversation_compaction_manifest_is_tool_free() -> None:
 
     manifest = load_scene_definition(FilePromptAssetStore(ConfigFileResolver()), "conversation_compaction")
 
-    assert manifest.model.default_name == "mimo-v2.5-pro-thinking-plan"
+    assert manifest.model.default_name == "deepseek-v4-flash-thinking"
     assert manifest.model.temperature_profile == "conversation_compaction"
     assert manifest.tool_selection_policy.mode.value == "none"
 
