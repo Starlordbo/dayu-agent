@@ -11,7 +11,7 @@ import pytest
 from dayu.contracts.model_config import OpenAICompatibleModelConfig
 from dayu.services.chat_service import ChatService
 from dayu.services.startup_preparation import prepare_host_runtime_dependencies
-from dayu.web.streamlit.pages.chat.stream_runtime import StreamQueueItem, run_stream_worker
+from dayu.web.streamlit.pages.chat.stream_runtime import ChatStreamEvent, StreamQueueItem, run_stream_worker
 from dayu.web.streamlit.pages.chat.utils import build_chat_session_id
 from tests.engine.test_async_openai_runner_call_paths import _build_runner_with_steps
 from tests.engine.test_responses_protocol import response, step, text_item
@@ -83,7 +83,7 @@ def _run_chat_worker(service: ChatService) -> list[StreamQueueItem]:
         无。
     """
 
-    event_queue: Queue[StreamQueueItem] = Queue()
+    event_queue: Queue[ChatStreamEvent] = Queue()
     run_stream_worker(
         chat_service=service,
         user_text="请总结当前信息。",
@@ -94,7 +94,8 @@ def _run_chat_worker(service: ChatService) -> list[StreamQueueItem]:
         trace_id="config-failfast-test",
         model_name=_MODEL_NAME,
     )
-    return [event_queue.get_nowait() for _ in range(event_queue.qsize())]
+    items = [event_queue.get_nowait() for _ in range(event_queue.qsize())]
+    return [item for item in items if isinstance(item, StreamQueueItem)]
 
 
 @pytest.mark.parametrize("field", ["model", "authorization"])

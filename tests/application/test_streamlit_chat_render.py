@@ -40,6 +40,7 @@ from dayu.host.protocols import (
 from dayu.services.contracts import ChatPendingTurnView, ChatResumeRequest, ChatTurnRequest, ChatTurnSubmission
 from dayu.services.protocols import ChatServiceProtocol
 from dayu.web.streamlit.pages.chat.stream_runtime import (
+    ChatStreamEvent,
     CHAT_STREAM_RUNTIME_HANDLES,
     ChatStreamRuntimeHandle,
     StreamQueueItem,
@@ -126,7 +127,7 @@ class _ChatService:
         self.submissions.append(request)
         session_id = request.session_id or _SESSION
         self.histories.setdefault(session_id, []).append(_turn(user=request.user_text))
-        return ChatTurnSubmission(session_id=session_id, event_stream=_offline_events())
+        return ChatTurnSubmission(effective_model_name="test-model", first_chunk_timeout_seconds=90.0, session_id=session_id, event_stream=_offline_events())
 
     async def resume_pending_turn(self, request: ChatResumeRequest) -> ChatTurnSubmission:
         """阻止聊天页意外调用恢复接口。
@@ -273,7 +274,7 @@ def _finished_worker() -> None:
     """
 
 
-def _install_queue(app: AppTest, monkeypatch: pytest.MonkeyPatch) -> Queue[StreamQueueItem]:
+def _install_queue(app: AppTest, monkeypatch: pytest.MonkeyPatch) -> Queue[ChatStreamEvent]:
     """注入生产队列及完整运行时句柄，不替代轮询、fragment、清理或渲染。
 
     参数:
@@ -288,7 +289,7 @@ def _install_queue(app: AppTest, monkeypatch: pytest.MonkeyPatch) -> Queue[Strea
     worker.start()
     worker.join(timeout=5)
     assert not worker.is_alive()
-    queue: Queue[StreamQueueItem] = Queue()
+    queue: Queue[ChatStreamEvent] = Queue()
     now = time.perf_counter()
     monkeypatch.setitem(CHAT_STREAM_RUNTIME_HANDLES, _TICKER, ChatStreamRuntimeHandle(
         worker=worker, event_queue=queue, cancel_event=threading.Event(), started_at=now,

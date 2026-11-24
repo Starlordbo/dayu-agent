@@ -128,6 +128,7 @@ def _resolve_services(
             host=prepared_deps.host,
             scene_execution_acceptance_preparer=prepared_deps.scene_execution_acceptance_preparer,
             default_scene_name="interactive",
+            chat_stream_config=prepared_deps.chat_stream_config,
             company_name_resolver=prepared_deps.fins_runtime.get_company_name,
             session_source=SessionSource.WEB,
         )

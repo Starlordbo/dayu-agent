@@ -167,6 +167,7 @@ def _run_labeled_prompt_command(
                 interactive=False,
             )
             service = _build_chat_service(
+                workspace=_workspace,
                 host=host,
                 scene_execution_acceptance_preparer=scene_execution_acceptance_preparer,
                 fins_runtime=fins_runtime,

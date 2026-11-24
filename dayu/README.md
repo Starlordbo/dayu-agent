@@ -521,6 +521,8 @@ AsyncIterator[AppEvent]
 class ChatTurnSubmission:
     session_id: str
     event_stream: AsyncIterator[AppEvent]
+    effective_model_name: str
+    first_chunk_timeout_seconds: float
 
 
 @dataclass(frozen=True)
@@ -528,6 +530,10 @@ class PromptSubmission:
     session_id: str
     event_stream: AsyncIterator[AppEvent]
 ```
+
+聊天 Service 从实际接受的模型及启动期注入的聊天等待配置解析提交阈值，UI 只消费
+`effective_model_name` 和 `first_chunk_timeout_seconds`，不自行推断模型或读取配置。
+这两个字段描述展示等待策略，不改变 Host 的运行生命周期与取消契约。
 
 #### 4.1.3 `AppResult`
 
@@ -1062,7 +1068,7 @@ sequenceDiagram
         UI->>Service: submit_turn(ChatTurnRequest(session_id, user_text, ticker?, scene_name="interactive", session_resolution_policy=ENSURE_DETERMINISTIC, execution_options?))
         Service->>Service: 解释业务语义，生成 Prompt Contributions
         Service->>Host: ensure_session()
-        Service-->>UI: ChatTurnSubmission(session_id, event_stream)
+        Service-->>UI: ChatTurnSubmission(session_id, event_stream, effective_model_name, first_chunk_timeout_seconds)
         Service->>Service: SceneExecutionAcceptancePreparer.prepare(...)
         Service->>Contract: prepare_execution_contract(...)
         Contract-->>Service: ExecutionContract

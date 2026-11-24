@@ -408,6 +408,32 @@ Runtime 的选择规则是：
 
 `run.json` 定义运行期行为配置。
 
+### 聊天首输出等待：`chat_stream_config`
+
+`first_chunk_timeout_seconds` 默认 `90.0` 秒；`first_chunk_timeout_seconds_by_runner`
+默认为空映射。Service 按本次实际接受模型的 `runner_type` 优先选择映射值，未命中时
+使用通用阈值。缺失字段使用默认值；显式值必须是有限正数，布尔值、字符串、`null`、
+非有限值和非正数均报配置错误，配置段和 runner 覆盖必须为对象。
+
+在 `workspace/config/run.json` 中加入以下配置可将 `openai_responses` 的首输出等待
+设为 300 秒，其他 runner 仍为 90 秒。此处仅为可选示例，包内默认配置不启用该覆盖：
+
+```json
+{
+  "chat_stream_config": {
+    "first_chunk_timeout_seconds": 90.0,
+    "first_chunk_timeout_seconds_by_runner": {
+      "openai_responses": 300.0
+    }
+  }
+}
+```
+
+修改配置后重启应用。Streamlit 从 worker 启动计时，首个非空正文或推理增量结束首输出等待；
+Service 返回实际模型和阈值后，UI 才据此判断并显示「等待模型首个输出超过 N 秒（模型：X）」。
+该配置不改变后续 chunk 的 45 秒间隔阈值，也不改变模型请求超时或工具超时。
+UI 超时只结束当前展示等待，不能据此认定 Host run 已取消或已完成。
+
 ### 5.1 `runner_running_config`
 
 Runner 调试与调用控制：

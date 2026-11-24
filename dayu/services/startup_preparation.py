@@ -17,6 +17,7 @@ from dayu.host.concurrency import SQLiteConcurrencyGovernor
 from dayu.host import Host, resolve_host_config
 from dayu.host.host_store import HostStore
 from dayu.services.concurrency_lanes import SERVICE_DEFAULT_LANE_CONFIG
+from dayu.services.chat_stream_config import ChatStreamConfig, parse_chat_stream_config
 from dayu.services.conversation_policy_reader import ConversationPolicyReader
 from dayu.services.host_admin_service import HostAdminService
 from dayu.services.fins_download_lane_gate import GovernorCnDownloadPdfGate
@@ -55,6 +56,7 @@ class PreparedHostRuntimeDependencies:
         scene_execution_acceptance_preparer: scene 执行接受准备器。
         host: Host 实例。
         fins_runtime: 财报领域运行时。
+        chat_stream_config: 已校验的聊天首输出等待配置。
     """
 
     workspace: WorkspaceResources
@@ -62,6 +64,7 @@ class PreparedHostRuntimeDependencies:
     scene_execution_acceptance_preparer: SceneExecutionAcceptancePreparer
     host: Host
     fins_runtime: FinsRuntimeProtocol
+    chat_stream_config: ChatStreamConfig
 
 
 def prepare_scene_execution_acceptance_preparer(
@@ -118,7 +121,8 @@ def prepare_host_runtime_dependencies(
         已完成 Host、scene preparation 与 fins runtime 装配的共享依赖集合。
 
     Raises:
-        无。
+        TypeError: 运行配置结构或聊天首输出阈值类型非法。
+        ValueError: 运行配置值非法，或聊天首输出阈值非有限、非正。
     """
 
     paths = resolve_startup_paths(
@@ -137,6 +141,7 @@ def prepare_host_runtime_dependencies(
     )
     model_catalog = ConfigLoaderModelCatalog(config_loader)
     run_config = config_loader.load_run_config()
+    chat_stream_config = parse_chat_stream_config(run_config)
     base_execution_options = build_base_execution_options(
         workspace_dir=paths.workspace_root,
         run_config=run_config,
@@ -196,6 +201,7 @@ def prepare_host_runtime_dependencies(
         scene_execution_acceptance_preparer=scene_execution_acceptance_preparer,
         host=host,
         fins_runtime=fins_runtime,
+        chat_stream_config=chat_stream_config,
     )
 
 

@@ -9,6 +9,7 @@ from typing import cast
 import pytest
 
 from dayu.execution.options import ExecutionOptions, ResolvedExecutionOptions
+from dayu.contracts.infrastructure import StructuredConfigObject
 from dayu.fins.service_runtime import DefaultFinsRuntime
 from dayu.host import Host
 from dayu.services.scene_execution_acceptance import SceneExecutionAcceptancePreparer
@@ -46,7 +47,7 @@ def test_prepare_host_runtime_dependencies_runs_unified_startup_recovery(
     )
     monkeypatch.setattr(
         "dayu.services.startup_preparation.ConfigLoader",
-        lambda _resolver: SimpleNamespace(load_run_config=lambda: SimpleNamespace()),
+        lambda _resolver: SimpleNamespace(load_run_config=lambda: {}),
     )
     monkeypatch.setattr(
         "dayu.services.startup_preparation.FilePromptAssetStore",
@@ -129,7 +130,7 @@ def test_prepare_host_runtime_dependencies_loads_run_config_once(
     fake_scene_preparer = cast(SceneExecutionAcceptancePreparer, object())
     fake_fins_runtime = cast(DefaultFinsRuntime, object())
     fake_host = cast(Host, object())
-    fake_run_config = SimpleNamespace(name="shared-run-config")
+    fake_run_config: StructuredConfigObject = {"chat_stream_config": {"first_chunk_timeout_seconds": 123.0}}
     load_run_config_calls: list[object] = []
     build_base_run_configs: list[object] = []
     resolve_host_run_configs: list[object] = []
@@ -146,8 +147,16 @@ def test_prepare_host_runtime_dependencies_loads_run_config_once(
     class _FakeConfigLoader:
         """记录 `load_run_config()` 调用次数的测试桩。"""
 
-        def load_run_config(self) -> object:
-            """返回共享的测试 run_config。"""
+        def load_run_config(self) -> StructuredConfigObject:
+            """返回共享的测试配置。
+
+            Args:
+                无。
+            Returns:
+                同一运行配置对象。
+            Raises:
+                无。
+            """
 
             load_run_config_calls.append(object())
             return fake_run_config
@@ -211,5 +220,6 @@ def test_prepare_host_runtime_dependencies_loads_run_config_once(
 
     assert prepared.host is fake_host
     assert len(load_run_config_calls) == 1
+    assert prepared.chat_stream_config.first_chunk_timeout_seconds == 123.0
     assert build_base_run_configs == [fake_run_config]
     assert resolve_host_run_configs == [fake_run_config]

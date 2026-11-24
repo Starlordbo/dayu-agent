@@ -18,12 +18,14 @@ from dayu.services.contracts import ChatPendingTurnView, ChatResumeRequest, Chat
 from dayu.services.protocols import ChatServiceProtocol
 from dayu.web.streamlit.pages.chat import stream_runtime
 from dayu.web.streamlit.pages.chat.stream_runtime import (
+    ChatStreamEvent,
     CHAT_STREAM_RUNTIME_HANDLES,
     consume_chat_event_stream,
     new_stream_frame_state,
     run_stream_worker,
     ChatStreamRuntimeHandle,
     StreamQueueItem,
+    StreamSubmissionInfo,
     poll_chat_stream_events,
 )
 
@@ -182,7 +184,7 @@ class TestChatStreamRuntimePolling:
         ticker = "AAPL"
         stream_runtime.st.session_state[stream_state_key] = new_stream_frame_state(trace_id="t1", session_id="s1")
         cancel_event = threading.Event()
-        queue: Queue[StreamQueueItem] = Queue()
+        queue: Queue[ChatStreamEvent] = Queue()
         runtime = ChatStreamRuntimeHandle(
             worker=cast(threading.Thread, _StubWorker(alive=True)),
             event_queue=queue,
@@ -190,16 +192,18 @@ class TestChatStreamRuntimePolling:
             started_at=0.0,
             last_chunk_at=0.0,
             has_received_chunk=False,
+            submission_info=StreamSubmissionInfo(
+                session_id="s1", effective_model_name="actual-model", first_chunk_timeout_seconds=1.0,
+            ),
         )
         CHAT_STREAM_RUNTIME_HANDLES[ticker] = runtime
         monkeypatch.setattr(stream_runtime.time, "perf_counter", lambda: 100.0)
-        monkeypatch.setattr(stream_runtime, "_STREAM_FIRST_CHUNK_TIMEOUT_SECONDS", 1.0)
 
         state = poll_chat_stream_events(ticker=ticker, stream_state_key=stream_state_key)
 
         assert state is not None
         assert state.done is True
-        assert "超时" in state.error_message
+        assert state.error_message == "等待模型首个输出超过 1 秒（模型：actual-model）"
         assert cancel_event.is_set() is True
 
     def test_chunk_interval_timeout_sets_cancel_and_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -207,7 +211,7 @@ class TestChatStreamRuntimePolling:
         ticker = "AAPL"
         stream_runtime.st.session_state[stream_state_key] = new_stream_frame_state(trace_id="t2", session_id="s2")
         cancel_event = threading.Event()
-        queue: Queue[StreamQueueItem] = Queue()
+        queue: Queue[ChatStreamEvent] = Queue()
         runtime = ChatStreamRuntimeHandle(
             worker=cast(threading.Thread, _StubWorker(alive=True)),
             event_queue=queue,
@@ -231,7 +235,7 @@ class TestChatStreamRuntimePolling:
         stream_state_key = "stream-state"
         ticker = "AAPL"
         stream_runtime.st.session_state[stream_state_key] = new_stream_frame_state(trace_id="t3", session_id="s3")
-        queue: Queue[StreamQueueItem] = Queue()
+        queue: Queue[ChatStreamEvent] = Queue()
         queue.put(StreamQueueItem(done=False, event_type="error", chunk="boom"))
         runtime = ChatStreamRuntimeHandle(
             worker=cast(threading.Thread, _StubWorker(alive=True)),
@@ -255,7 +259,7 @@ class TestChatStreamRuntimePolling:
         state = new_stream_frame_state(trace_id="t4", session_id="s4")
         state.done = True
         stream_runtime.st.session_state[stream_state_key] = state
-        queue: Queue[StreamQueueItem] = Queue()
+        queue: Queue[ChatStreamEvent] = Queue()
         queue.put(StreamQueueItem(done=False, event_type="side_message", chunk="warn"))
         queue.put(StreamQueueItem(done=False, event_type="filtered", flag=True))
         queue.put(StreamQueueItem(done=False, event_type="error", chunk="late error"))
@@ -282,7 +286,7 @@ class TestChatStreamRuntimePolling:
 async def test_consume_chat_event_stream_stops_when_cancelled() -> None:
     """取消信号置位后应停止继续投递后续 chunk。"""
 
-    event_queue: Queue[StreamQueueItem] = Queue()
+    event_queue: Queue[ChatStreamEvent] = Queue()
     cancel_event = threading.Event()
 
     async def _event_stream() -> AsyncIterator[AppEvent]:
@@ -290,7 +294,7 @@ async def test_consume_chat_event_stream_stops_when_cancelled() -> None:
         cancel_event.set()
         yield AppEvent(type=AppEventType.CONTENT_DELTA, payload="second")
 
-    submission = ChatTurnSubmission(session_id="session-new", event_stream=_event_stream())
+    submission = ChatTurnSubmission(effective_model_name="test-model", first_chunk_timeout_seconds=90.0, session_id="session-new", event_stream=_event_stream())
     chat_service = _StubChatService(submission=submission)
 
     await consume_chat_event_stream(
@@ -303,14 +307,14 @@ async def test_consume_chat_event_stream_stops_when_cancelled() -> None:
         trace_id="trace-test",
     )
 
-    events: list[StreamQueueItem] = []
+    events: list[ChatStreamEvent] = []
     while True:
         try:
             events.append(event_queue.get_nowait())
         except Empty:
             break
 
-    chunk_values = [event.chunk for event in events if event.event_type == "chunk"]
+    chunk_values = [event.chunk for event in events if isinstance(event, StreamQueueItem) and event.event_type == "chunk"]
     assert "first" in chunk_values
     assert "second" not in chunk_values
 
@@ -319,7 +323,7 @@ async def test_consume_chat_event_stream_stops_when_cancelled() -> None:
 def test_run_stream_worker_emits_error_and_done_on_exception(monkeypatch: pytest.MonkeyPatch) -> None:
     """worker 协程异常时应投递 error 与 done 事件。"""
 
-    event_queue: Queue[StreamQueueItem] = Queue()
+    event_queue: Queue[ChatStreamEvent] = Queue()
     cancel_event = threading.Event()
 
     async def _raise_in_consumer(
@@ -328,7 +332,7 @@ def test_run_stream_worker_emits_error_and_done_on_exception(monkeypatch: pytest
         user_text: str,
         session_id: str | None,
         ticker: str,
-        event_queue: Queue[StreamQueueItem],
+        event_queue: Queue[ChatStreamEvent],
         cancel_event: threading.Event,
         trace_id: str,
         model_name: str | None = None,
@@ -340,7 +344,7 @@ def test_run_stream_worker_emits_error_and_done_on_exception(monkeypatch: pytest
 
     run_stream_worker(
         chat_service=_StubChatService(
-            submission=ChatTurnSubmission(session_id="s", event_stream=_empty_event_stream())
+            submission=ChatTurnSubmission(effective_model_name="test-model", first_chunk_timeout_seconds=90.0, session_id="s", event_stream=_empty_event_stream())
         ),
         user_text="u",
         session_id=None,
@@ -352,6 +356,8 @@ def test_run_stream_worker_emits_error_and_done_on_exception(monkeypatch: pytest
 
     first = event_queue.get_nowait()
     second = event_queue.get_nowait()
+    assert isinstance(first, StreamQueueItem)
+    assert isinstance(second, StreamQueueItem)
     assert first.event_type == "error"
     assert "worker failed" in first.chunk
     assert second.event_type == "done"
@@ -389,10 +395,63 @@ async def test_selected_model_reaches_service(model_name: str | None) -> None:
     Raises:
         AssertionError: 选项丢失或默认被覆盖。
     """
-    service = _StubChatService(ChatTurnSubmission(session_id="s1", event_stream=_empty_model_selection_stream()))
-    await consume_chat_event_stream(chat_service=service, user_text="x", session_id="s1", ticker="AAA", event_queue=Queue(), cancel_event=threading.Event(), trace_id="model-test", model_name=model_name)
+    service = _StubChatService(ChatTurnSubmission(effective_model_name="test-model", first_chunk_timeout_seconds=90.0, session_id="s1", event_stream=_empty_model_selection_stream()))
+    event_queue: Queue[ChatStreamEvent] = Queue()
+    await consume_chat_event_stream(chat_service=service, user_text="x", session_id="s1", ticker="AAA", event_queue=event_queue, cancel_event=threading.Event(), trace_id="model-test", model_name=model_name)
+    # Service 返回值先于任何模型输出跨线程传递，不能从可空 UI 选择推断。
+    assert event_queue.get_nowait() == StreamSubmissionInfo(
+        session_id="s1", effective_model_name="test-model", first_chunk_timeout_seconds=90.0,
+    )
     options = service.requests[0].execution_options
     if model_name is None:
         assert options is None
     else:
         assert options is not None and options.model_name == model_name
+
+
+@pytest.mark.parametrize("timeout_seconds", [90.0, 300.0])
+@pytest.mark.parametrize("received_kind", [None, "content", "reasoning"])
+def test_first_output_timeout_boundary_and_chunk_transition(
+    monkeypatch: pytest.MonkeyPatch,
+    timeout_seconds: float,
+    received_kind: str | None,
+) -> None:
+    """生效阈值之前不超时，正文与推理首增量都切换到既有间隔计时。
+
+    Args:
+        monkeypatch: 固定轮询时间。
+        timeout_seconds: Service 生效阈值。
+        received_kind: 阈值前是否收到正文或推理增量。
+    Returns:
+        无。
+    Raises:
+        AssertionError: 阈值提前生效或首增量后的正常路径变化。
+    """
+    ticker = "boundary"
+    state_key = "boundary-state"
+    stream_runtime.st.session_state[state_key] = new_stream_frame_state(trace_id=ticker, session_id="old")
+    event_queue: Queue[ChatStreamEvent] = Queue()
+    event_queue.put(StreamSubmissionInfo(
+        session_id="actual", effective_model_name="actual-model", first_chunk_timeout_seconds=timeout_seconds,
+    ))
+    runtime = ChatStreamRuntimeHandle(
+        worker=cast(threading.Thread, _StubWorker(alive=True)), event_queue=event_queue,
+        cancel_event=threading.Event(), started_at=0.0, last_chunk_at=0.0, has_received_chunk=False,
+    )
+    CHAT_STREAM_RUNTIME_HANDLES[ticker] = runtime
+    monkeypatch.setattr(stream_runtime.time, "perf_counter", lambda: timeout_seconds - 1.0)
+    if received_kind is not None:
+        kind = "reasoning" if received_kind == "reasoning" else "content"
+        event_queue.put(StreamQueueItem(done=False, kind=kind, chunk="first"))
+    state = poll_chat_stream_events(ticker=ticker, stream_state_key=state_key)
+    assert state is not None and not state.done and state.session_id == "actual"
+    monkeypatch.setattr(stream_runtime.time, "perf_counter", lambda: timeout_seconds)
+    state = poll_chat_stream_events(ticker=ticker, stream_state_key=state_key)
+    assert state is not None
+    if received_kind is None:
+        assert state.done
+        assert state.error_message == f"等待模型首个输出超过 {timeout_seconds:g} 秒（模型：actual-model）"
+    else:
+        assert not state.done and not state.error_message
+        assert state.answer_text == ("first" if received_kind == "content" else "")
+        assert state.reasoning_text == ("first" if received_kind == "reasoning" else "")

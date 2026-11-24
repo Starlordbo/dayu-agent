@@ -43,6 +43,7 @@ from dayu.fins.service_runtime import DefaultFinsRuntime, FinsRuntimeProtocol
 from dayu.fins.storage import FsSourceDocumentRepository
 from dayu.host import Host, purge_sessions_from_host_db
 from dayu.log import Log, set_level_from_flags
+from dayu.services.chat_stream_config import parse_chat_stream_config
 from dayu.services import prepare_host_runtime_dependencies, WriteRunConfig
 from dayu.services.chat_service import ChatService
 from dayu.services.fins_service import FinsService
@@ -566,6 +567,7 @@ def _reset_cli_shutdown_coordinator_for_testing() -> None:
 
 def _build_chat_service(
     *,
+    workspace: WorkspaceResources,
     host: Host,
     scene_execution_acceptance_preparer: SceneExecutionAcceptancePreparer,
     fins_runtime: FinsRuntimeProtocol,
@@ -573,6 +575,7 @@ def _build_chat_service(
     """构建交互聊天服务。
 
     Args:
+        workspace: 提供运行配置的工作区资源。
         host: 宿主对象。
         scene_execution_acceptance_preparer: scene 执行参数接受器。
         fins_runtime: 财报运行时。
@@ -581,13 +584,15 @@ def _build_chat_service(
         聊天服务实例。
 
     Raises:
-        无。
+        TypeError: 聊天首输出等待配置类型非法。
+        ValueError: 聊天首输出等待配置值非法。
     """
 
     return ChatService(
         host=host,
         scene_execution_acceptance_preparer=scene_execution_acceptance_preparer,
         default_scene_name="interactive",
+        chat_stream_config=parse_chat_stream_config(workspace.config_loader.load_run_config()),
         company_name_resolver=fins_runtime.get_company_name,
         session_source=SessionSource.CLI,
     )

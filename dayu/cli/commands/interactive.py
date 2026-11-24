@@ -94,6 +94,7 @@ def run_interactive_command(args: argparse.Namespace) -> int:
             interactive=True,
         )
         service = _build_chat_service(
+            workspace=_workspace,
             host=host,
             scene_execution_acceptance_preparer=scene_execution_acceptance_preparer,
             fins_runtime=fins_runtime,

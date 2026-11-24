@@ -761,6 +761,7 @@ def _create_run_daemon(
         host=host,
         scene_execution_acceptance_preparer=scene_execution_acceptance_preparer,
         default_scene_name="interactive",
+        chat_stream_config=prepared.chat_stream_config,
         company_name_resolver=fins_runtime.get_company_name,
         session_source=SessionSource.WECHAT,
     )

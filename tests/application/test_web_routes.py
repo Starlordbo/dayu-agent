@@ -618,7 +618,7 @@ def test_chat_route_creates_task_only_after_successful_submit(monkeypatch: pytes
     class _SuccessfulChatService:
         async def submit_turn(self, request):
             del request
-            return ChatTurnSubmission(session_id="session_chat", event_stream=_empty_app_stream())
+            return ChatTurnSubmission(effective_model_name="test-model", first_chunk_timeout_seconds=90.0, session_id="session_chat", event_stream=_empty_app_stream())
 
     class _ReplyDeliveryService:
         def submit_reply_for_delivery(self, request):
@@ -655,7 +655,7 @@ def test_chat_route_normalizes_empty_session_id_to_none(monkeypatch: pytest.Monk
     class _CapturingChatService:
         async def submit_turn(self, request):
             captured_requests.append(request)
-            return ChatTurnSubmission(session_id="session_new", event_stream=_empty_app_stream())
+            return ChatTurnSubmission(effective_model_name="test-model", first_chunk_timeout_seconds=90.0, session_id="session_new", event_stream=_empty_app_stream())
 
     class _NoopReplyDeliveryService:
         def submit_reply_for_delivery(self, request):
@@ -751,7 +751,7 @@ def test_chat_resume_route_creates_task_only_after_successful_resume(monkeypatch
         async def resume_pending_turn(self, request):
             assert request.session_id == "session_chat"
             assert request.pending_turn_id == "pending_1"
-            return ChatTurnSubmission(session_id="session_chat", event_stream=_empty_app_stream())
+            return ChatTurnSubmission(effective_model_name="test-model", first_chunk_timeout_seconds=90.0, session_id="session_chat", event_stream=_empty_app_stream())
 
     class _ReplyDeliveryService:
         def submit_reply_for_delivery(self, request):
@@ -812,7 +812,7 @@ def test_chat_resume_route_uses_pending_turn_scene_name_for_background_consumer(
         async def resume_pending_turn(self, request):
             assert request.session_id == "session_chat"
             assert request.pending_turn_id == "pending_1"
-            return ChatTurnSubmission(session_id="session_chat", event_stream=_empty_app_stream())
+            return ChatTurnSubmission(effective_model_name="test-model", first_chunk_timeout_seconds=90.0, session_id="session_chat", event_stream=_empty_app_stream())
 
     class _ReplyDeliveryService:
         def submit_reply_for_delivery(self, request):

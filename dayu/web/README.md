@@ -72,3 +72,9 @@ Streamlit 交互页只展示已配置且在 interactive 场景允许名单内的
 元数据是续聊模型的真源，页面默认值不会覆盖它。“新建会话”将独立 ID 写入 URL，
 刷新可恢复同一会话；旧会话历史不会被删除。生成中禁用新建动作。
 报告页仍为占位实现，不会因页面刷新触发报告或模型请求。
+
+`ChatTurnSubmission` 显式提供 `effective_model_name` 和 `first_chunk_timeout_seconds`。
+worker 在消费事件流前将提交信息投递给 UI；UI 使用该阈值及实际模型生成首输出超时提示，
+不从页面可空模型选择推断。首输出计时仍从 worker 启动开始，正文或推理的非空增量均视为首输出。
+配置入口见[聊天首输出等待](../config/README.md#聊天首输出等待chat_stream_config)。
+超时不会确认 Host run 的取消或终态。

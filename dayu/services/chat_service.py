@@ -9,6 +9,7 @@ from typing import AsyncIterator, Callable
 
 from dayu.contracts.agent_execution import ExecutionContract
 from dayu.contracts.events import AppEvent
+from dayu.contracts.model_config import normalize_runner_type
 from dayu.contracts.session import SessionSource
 from dayu.host.protocols import (
     ChatServiceHostProtocol,
@@ -18,6 +19,7 @@ from dayu.host.protocols import (
 from dayu.contracts.execution_metadata import normalize_execution_delivery_context
 from dayu.prompting.scene_definition import PromptManifestError
 from dayu.services.concurrency_lanes import resolve_contract_concurrency_lane
+from dayu.services.chat_stream_config import ChatStreamConfig
 from dayu.services.contract_preparation import prepare_execution_contract
 from dayu.services.contracts import (
     ChatPendingTurnView,
@@ -52,6 +54,7 @@ class ChatService(ChatServiceProtocol):
     host: ChatServiceHostProtocol
     scene_execution_acceptance_preparer: SceneExecutionAcceptancePreparer
     default_scene_name: str
+    chat_stream_config: ChatStreamConfig = field(default_factory=ChatStreamConfig)
     company_name_resolver: Callable[[str], str] | None = None
     session_source: SessionSource = SessionSource.API
     # 以弱引用持有每 session 的串行锁：只要存在至少一个生成器/任务引用该锁对象，
@@ -110,6 +113,10 @@ class ChatService(ChatServiceProtocol):
         session_lock = self._lock_for_session(session.session_id)
         return ChatTurnSubmission(
             session_id=session.session_id,
+            effective_model_name=prepared_context.accepted_scene.accepted_execution_spec.model.model_name,
+            first_chunk_timeout_seconds=self.chat_stream_config.resolve_first_chunk_timeout_seconds(
+                normalize_runner_type(prepared_context.accepted_scene.model_config.get("runner_type")).value
+            ),
             event_stream=self._stream_turn_in_session_with_lock(
                 request=request,
                 session_id=session.session_id,
@@ -143,12 +150,18 @@ class ChatService(ChatServiceProtocol):
             )
         session = self.host.get_session(session_id)
         selected = session.metadata.get("selected_model_name") if session else None
+        restored_scene = self.scene_execution_acceptance_preparer.prepare(
+            pending_turn.scene_name, ExecutionOptions(model_name=selected) if selected else None
+        )
         if selected and session:
-            restored_scene = self.scene_execution_acceptance_preparer.prepare(pending_turn.scene_name, ExecutionOptions(model_name=selected))
             if session_model_metadata(restored_scene).get("model_config_fingerprint") != session.metadata.get("model_config_fingerprint"):
                 raise ValueError("会话模型或协议配置已变更，禁止恢复到其他供应商")
         return ChatTurnSubmission(
             session_id=pending_turn.session_id,
+            effective_model_name=restored_scene.accepted_execution_spec.model.model_name,
+            first_chunk_timeout_seconds=self.chat_stream_config.resolve_first_chunk_timeout_seconds(
+                normalize_runner_type(restored_scene.model_config.get("runner_type")).value
+            ),
             event_stream=self.host.resume_pending_turn_stream(request.pending_turn_id, session_id=session_id),
         )
 

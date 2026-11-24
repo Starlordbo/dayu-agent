@@ -10,7 +10,7 @@ import threading
 import time
 from dataclasses import dataclass
 from queue import Empty, Queue
-from typing import Literal
+from typing import Literal, TypeAlias
 
 import streamlit as st
 
@@ -29,9 +29,8 @@ from dayu.web.streamlit.pages.chat.utils import (
 MODULE = "dayu.web.streamlit.pages.chat.stream_runtime"
 
 _SCENE_NAME_INTERACTIVE = "interactive"
-_STREAM_FIRST_CHUNK_TIMEOUT_SECONDS = 90.0
 _STREAM_CHUNK_TIMEOUT_SECONDS = 45.0
-_STREAM_TIMEOUT_MESSAGE = "交互式分析等待模型输出超时，请检查模型 API Key、网络连接或稍后重试。"
+_STREAM_TIMEOUT_MESSAGE = "等待模型后续输出超时，请稍后重试。"
 _STREAM_EVENT_BATCH_LIMIT = 256
 
 
@@ -42,8 +41,20 @@ class StreamQueueItem:
     done: bool
     kind: Literal["content", "reasoning"] = "content"
     chunk: str = ""
-    event_type: Literal["chunk", "session_id", "side_message", "filtered", "error", "done"] = "chunk"
+    event_type: Literal["chunk", "side_message", "filtered", "error", "done"] = "chunk"
     flag: bool = False
+
+
+@dataclass(frozen=True)
+class StreamSubmissionInfo:
+    """Service 已接受的提交信息，在消费模型事件前跨线程传给 UI。"""
+
+    session_id: str
+    effective_model_name: str
+    first_chunk_timeout_seconds: float
+
+
+ChatStreamEvent: TypeAlias = StreamQueueItem | StreamSubmissionInfo
 
 
 @dataclass
@@ -65,11 +76,12 @@ class ChatStreamRuntimeHandle:
     """后台流式 worker 运行时句柄。"""
 
     worker: threading.Thread
-    event_queue: Queue[StreamQueueItem]
+    event_queue: Queue[ChatStreamEvent]
     cancel_event: threading.Event
     started_at: float
     last_chunk_at: float
     has_received_chunk: bool
+    submission_info: StreamSubmissionInfo | None = None
 
 
 CHAT_STREAM_RUNTIME_HANDLES: dict[str, ChatStreamRuntimeHandle] = {}
@@ -81,7 +93,7 @@ async def consume_chat_event_stream(
     user_text: str,
     session_id: str | None,
     ticker: str,
-    event_queue: Queue[StreamQueueItem],
+    event_queue: Queue[ChatStreamEvent],
     cancel_event: threading.Event,
     trace_id: str,
     model_name: str | None = None,
@@ -96,12 +108,13 @@ async def consume_chat_event_stream(
         event_queue: 线程安全队列，用于向主线程投递流式事件。
         cancel_event: 取消信号事件；主线程设置后协程应尽快退出。
         trace_id: 请求链路追踪标识。
+        model_name: 可选模型选择，最终生效值由 Service 返回。
 
     返回值:
         无。
 
     异常:
-        无；异常由调用方通过 ``err_out`` 捕获。
+        Exception: Service 提交或事件消费失败；由 worker 捕获并上报。
     """
 
     request_started_at = time.perf_counter()
@@ -125,10 +138,10 @@ async def consume_chat_event_stream(
         module=MODULE,
     )
     event_queue.put(
-        StreamQueueItem(
-            done=False,
-            event_type="session_id",
-            chunk=submission.session_id,
+        StreamSubmissionInfo(
+            session_id=submission.session_id,
+            effective_model_name=submission.effective_model_name,
+            first_chunk_timeout_seconds=submission.first_chunk_timeout_seconds,
         )
     )
 
@@ -223,7 +236,7 @@ def run_stream_worker(
     user_text: str,
     session_id: str | None,
     ticker: str,
-    event_queue: Queue[StreamQueueItem],
+    event_queue: Queue[ChatStreamEvent],
     cancel_event: threading.Event,
     trace_id: str,
     model_name: str | None = None,
@@ -238,6 +251,7 @@ def run_stream_worker(
         event_queue: 线程安全队列，用于向主线程投递流式事件。
         cancel_event: 取消信号事件；接收后应尽快停止消费。
         trace_id: 请求链路追踪标识。
+        model_name: 可选模型选择，最终生效值由 Service 返回。
 
     返回值:
         无。
@@ -366,6 +380,7 @@ def start_chat_stream_runtime(
         session_id: 会话标识。
         trace_id: 请求追踪标识。
         stream_state_key: 会话状态键。
+        model_name: 可选模型选择，最终生效值由 Service 返回。
 
     返回值:
         无。
@@ -375,7 +390,7 @@ def start_chat_stream_runtime(
     """
 
     clear_chat_stream_runtime(ticker=ticker, stream_state_key=stream_state_key)
-    event_queue: Queue[StreamQueueItem] = Queue()
+    event_queue: Queue[ChatStreamEvent] = Queue()
     cancel_event = threading.Event()
     worker = threading.Thread(
         target=run_stream_worker,
@@ -441,6 +456,10 @@ def poll_chat_stream_events(*, ticker: str, stream_state_key: str) -> ChatStream
         except Empty:
             break
         processed_events += 1
+        if isinstance(event, StreamSubmissionInfo):
+            state.session_id = event.session_id
+            runtime.submission_info = event
+            continue
         if event.event_type == "chunk":
             if event.kind == "reasoning":
                 state.reasoning_text = f"{state.reasoning_text}{event.chunk}"
@@ -448,9 +467,6 @@ def poll_chat_stream_events(*, ticker: str, stream_state_key: str) -> ChatStream
                 state.answer_text = f"{state.answer_text}{event.chunk}"
             runtime.has_received_chunk = True
             runtime.last_chunk_at = time.perf_counter()
-            continue
-        if event.event_type == "session_id":
-            state.session_id = event.chunk
             continue
         if event.event_type == "side_message":
             state.side_messages.append(event.chunk)
@@ -469,10 +485,20 @@ def poll_chat_stream_events(*, ticker: str, stream_state_key: str) -> ChatStream
     if runtime.worker.is_alive() and (not state.done):
         elapsed_since_start = now - runtime.started_at
         elapsed_since_chunk = now - runtime.last_chunk_at
-        if (not runtime.has_received_chunk) and (elapsed_since_start >= _STREAM_FIRST_CHUNK_TIMEOUT_SECONDS):
+        submission_info = runtime.submission_info
+        # 等 Service 返回实际模型和阈值后再判断，避免 UI 的空选择或旧阈值误判。
+        # 计时起点仍为 worker 启动时刻，不因收到提交信息而重新计时。
+        if (
+            not runtime.has_received_chunk
+            and submission_info is not None
+            and elapsed_since_start >= submission_info.first_chunk_timeout_seconds
+        ):
             runtime.cancel_event.set()
             state.done = True
-            state.error_message = _STREAM_TIMEOUT_MESSAGE
+            state.error_message = (
+                f"等待模型首个输出超过 {submission_info.first_chunk_timeout_seconds:g} 秒"
+                f"（模型：{submission_info.effective_model_name}）"
+            )
         elif runtime.has_received_chunk and (elapsed_since_chunk >= _STREAM_CHUNK_TIMEOUT_SECONDS):
             runtime.cancel_event.set()
             state.done = True
@@ -484,6 +510,10 @@ def poll_chat_stream_events(*, ticker: str, stream_state_key: str) -> ChatStream
                 trailing_event = runtime.event_queue.get_nowait()
             except Empty:
                 break
+            if isinstance(trailing_event, StreamSubmissionInfo):
+                state.session_id = trailing_event.session_id
+                runtime.submission_info = trailing_event
+                continue
             if trailing_event.event_type == "side_message":
                 state.side_messages.append(trailing_event.chunk)
             elif trailing_event.event_type == "filtered":

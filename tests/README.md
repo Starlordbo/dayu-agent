@@ -136,7 +136,8 @@ pip install -r requirements.txt
 - `test_web_routes.py` 还要守住 `/api/write` 的未支持语义：当 Web 当前不支持在线写作时，route 必须显式返回 `501`，不能再用 `202` / `accepted=true` 伪装成已受理。
 - `test_streamlit_watchlist.py` 负责守住 Streamlit 自选股组件的本地持久化与表格合并边界：`workspace/.dayu/streamlit/watchlist.json` 读写、删除/编辑/新增合并、必填校验与 ticker 去重语义不能漂移。
 - `test_streamlit_chat_utils.py` 负责守住 `chat/utils.py` 的 session/trace 标识生成、流式文本提取与 Markdown 归一，以及事件折叠保留副作用消息等纯函数语义。
-- `test_streamlit_chat_stream_runtime.py` 负责守住 `chat/stream_runtime.py` 的首 chunk 超时、chunk 间超时、取消传播、worker 退出后 trailing event 消费与 error 事件收口语义。
+- `test_streamlit_chat_stream_runtime.py` 负责守住 `chat/stream_runtime.py` 的首 chunk 超时、chunk 间超时、消费线程停止信号、worker 退出后 trailing event 消费与 error 事件收口语义；线程信号不等于 Host run 已取消。
+- `test_chat_stream_config.py` 覆盖首输出阈值默认 90 秒、runner 覆盖和非法配置；`test_model_picker.py` 验证 Service 提交返回实际模型与阈值、省略模型选择时恢复会话绑定，以及真实 AppTest 页面经 Service / Host / Agent 到延迟假 Runner 的超时文案、阈值附近耗时、快路径和放宽阈值后的完成行为。延迟测试只等待假 Runner 自然返回，不据此断言 Host 取消或孤儿 run 已修复。
 - `test_streamlit_chat_tab.py` 负责守住 `chat_tab.py` 中 `ChatMessage` 稳定语义、`load_history_for_ticker` 的历史轮次映射与 fail-soft（空结果/异常）语义，以及 `perform_clear_session_history` 对 `KeyError / Rejected / Stale(含静默重试) / PartiallyApplied / 重试失败` 的 UI 分支语义。
 - `tests/engine/test_config_loader_failfast.py` 负责守住单模型加载拒绝缺失、空白及残留占位符，目录枚举保留未使用模型模板，诊断不回显变量值；`tests/application/test_llm_config_failfast.py` 通过真实 UI worker 和 Service 验证失败时零 HTTP、错误终态投递，以及修复变量后经 Host/Agent/Runner 重试成功。纯路由和 CLI 配置测试也必须为实际加载的模型提供有效的独立测试变量，不依赖开发机凭据。
 - `tests/application/test_model_picker.py` 使用内置配置与真实 AppTest 下拉选择，经 UI worker、Service、Host、Agent、Runner 的假 HTTP 验证 `gpt-6-astra` 固定请求模型；同时验证不依赖 `OPENAI_RESPONSES_MODEL`、缺少 `OPENAI_API_KEY` 时明确报错且零 HTTP。

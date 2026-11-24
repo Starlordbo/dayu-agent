@@ -1132,6 +1132,8 @@ def _build_event_session(*event_sequences: list[StreamEvent], fail_with: Excepti
 
             request_log.append(request)
             return ChatTurnSubmission(
+                effective_model_name="test-model",
+                first_chunk_timeout_seconds=90.0,
                 session_id=request.session_id or "test-session",
                 event_stream=cast(AsyncIterator[AppEvent], self._yield_events(request.user_text)),
             )
@@ -1140,6 +1142,8 @@ def _build_event_session(*event_sequences: list[StreamEvent], fail_with: Excepti
             """按 ChatServiceProtocol 返回恢复提交结果。"""
 
             return ChatTurnSubmission(
+                effective_model_name="test-model",
+                first_chunk_timeout_seconds=90.0,
                 session_id=request.session_id,
                 event_stream=cast(AsyncIterator[AppEvent], self._yield_events(request.pending_turn_id)),
             )
@@ -1204,6 +1208,8 @@ def test_run_chat_turn_stream_uses_submit_turn_protocol_only(monkeypatch: pytest
                 )
 
             return ChatTurnSubmission(
+                effective_model_name="test-model",
+                first_chunk_timeout_seconds=90.0,
                 session_id=request.session_id or "resolved-session",
                 event_stream=_stream(),
             )
@@ -1287,7 +1293,7 @@ def test_interactive_uses_custom_scene_for_pending_turn_restore_and_new_turns(
                     meta={},
                 )
 
-            return ChatTurnSubmission(session_id=request.session_id, event_stream=_stream())
+            return ChatTurnSubmission(effective_model_name="test-model", first_chunk_timeout_seconds=90.0, session_id=request.session_id, event_stream=_stream())
 
         async def submit_turn(self, request: ChatTurnRequest) -> ChatTurnSubmission:
             if request.scene_name is None:
@@ -1301,7 +1307,7 @@ def test_interactive_uses_custom_scene_for_pending_turn_restore_and_new_turns(
                     meta={},
                 )
 
-            return ChatTurnSubmission(session_id=request.session_id or "test-session", event_stream=_stream())
+            return ChatTurnSubmission(effective_model_name="test-model", first_chunk_timeout_seconds=90.0, session_id=request.session_id or "test-session", event_stream=_stream())
 
     monkeypatch.setattr(app_interactive.sys, "stdin", SimpleNamespace(isatty=lambda: True))
     monkeypatch.setattr(app_interactive.Log, "error", lambda *_args, **_kwargs: None)
@@ -2415,6 +2421,8 @@ def test_interactive_cleans_up_pending_turn_on_keyboard_interrupt(
                 )
 
             return ChatTurnSubmission(
+                effective_model_name="test-model",
+                first_chunk_timeout_seconds=90.0,
                 session_id=request.session_id or "test-session",
                 event_stream=_stream(),
             )

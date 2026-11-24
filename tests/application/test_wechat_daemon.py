@@ -152,6 +152,8 @@ class _FakeChatService:
         self.submit_turn_requests.append(request)
         session_id = request.session_id or build_wechat_session_id("user@im.wechat")
         return ChatTurnSubmission(
+            effective_model_name="test-model",
+            first_chunk_timeout_seconds=90.0,
             session_id=session_id,
             event_stream=self._build_scripted_event_stream(request),
         )
@@ -268,6 +270,8 @@ class _FakeResumableChatService(_FakeChatService):
                 yield event
 
         return ChatTurnSubmission(
+            effective_model_name="test-model",
+            first_chunk_timeout_seconds=90.0,
             session_id=build_wechat_session_id("user@im.wechat"),
             event_stream=_stream(),
         )

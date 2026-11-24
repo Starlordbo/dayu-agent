@@ -142,10 +142,14 @@ class ChatTurnSubmission:
     Attributes:
         session_id: Service 解析后的会话 ID。
         event_stream: 事件流句柄。
+        effective_model_name: Service 接受并绑定到本次提交的模型名。
+        first_chunk_timeout_seconds: 按生效模型 runner 解析的首输出等待秒数。
     """
 
     session_id: str
     event_stream: AsyncIterator[AppEvent]
+    effective_model_name: str
+    first_chunk_timeout_seconds: float
 
 
 @dataclass(frozen=True)

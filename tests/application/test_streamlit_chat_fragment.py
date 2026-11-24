@@ -20,6 +20,7 @@ from streamlit.testing.v1.local_script_runner import LocalScriptRunner
 from dayu.contracts.events import AppEvent, AppEventType
 from dayu.services.contracts import ChatTurnRequest, ChatTurnSubmission
 from dayu.web.streamlit.pages.chat.stream_runtime import (
+    ChatStreamEvent,
     CHAT_STREAM_RUNTIME_HANDLES,
     StreamQueueItem,
     run_stream_worker,
@@ -83,6 +84,8 @@ class _TerminalChatService(_ChatService):
         if self.failure_message:
             raise RuntimeError(self.failure_message)
         return ChatTurnSubmission(
+            effective_model_name="test-model",
+            first_chunk_timeout_seconds=90.0,
             session_id=request.session_id or _SESSION,
             event_stream=_terminal_events(self.events),
         )
@@ -93,7 +96,7 @@ class _FragmentRerunPlan:
     """保存一次自动 fragment 请求的输入与运行证据，不替代生产渲染逻辑。"""
 
     service: _TerminalChatService
-    event_queue: Queue[StreamQueueItem]
+    event_queue: Queue[ChatStreamEvent]
     runs: list[tuple[tuple[str, ...], ScriptRunnerEvent]] = field(default_factory=list)
     initial_buttons: tuple[bool, bool, str] | None = None
     scheduled: bool = False

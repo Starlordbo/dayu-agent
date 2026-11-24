@@ -56,6 +56,7 @@ from dayu.prompting.scene_definition import (
     SceneModelDefinition,
 )
 from dayu.services.chat_service import ChatService
+from dayu.services.chat_stream_config import ChatStreamConfig
 from dayu.services.contracts import ChatResumeRequest, ChatTurnRequest, SessionResolutionPolicy
 from dayu.services.protocols import ChatServiceProtocol
 from dayu.services.scene_execution_acceptance import (
@@ -469,6 +470,36 @@ def test_stream_turn_outputs_execution_contract(monkeypatch: pytest.MonkeyPatch)
     assert contract.preparation_spec.prompt_contributions["base_user"] == "# 用户与运行时上下文\n当前时间：2026年04月03日。"
     assert contract.preparation_spec.prompt_contributions["fins_default_subject"] == "# 当前分析对象\n你正在分析的是 AAPL（AAPL-NAME）。"
     assert contract.metadata == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("default_timeout", [90.0, 120.0])
+async def test_default_scene_and_pending_resume_return_effective_stream_settings(default_timeout: float) -> None:
+    """默认场景和 pending 恢复使用绑定模型；其它 runner 覆盖不影响它。
+
+    Args:
+        default_timeout: 通用首输出等待秒数。
+    Returns:
+        无。
+    Raises:
+        AssertionError: 生效模型、runner 回退值或恢复提交字段不符。
+    """
+    service, _resolver = _build_service()
+    service.chat_stream_config = ChatStreamConfig(
+        first_chunk_timeout_seconds=default_timeout,
+        first_chunk_timeout_seconds_by_runner={"openai_responses": 300.0},
+    )
+    submission = await service.submit_turn(ChatTurnRequest(session_id="s1", user_text="hello"))
+    assert submission.effective_model_name == "chat-model"
+    assert submission.first_chunk_timeout_seconds == default_timeout
+    async for _event in submission.event_stream:
+        pass
+    pending_turn_id = _seed_pending_turn_with_contract(
+        service, execution_contract=_last_execution_contract(service), run_state="failed",
+    )
+    resumed = await service.resume_pending_turn(ChatResumeRequest(session_id="s1", pending_turn_id=pending_turn_id))
+    assert resumed.effective_model_name == submission.effective_model_name
+    assert resumed.first_chunk_timeout_seconds == default_timeout
 
 
 @pytest.mark.unit
